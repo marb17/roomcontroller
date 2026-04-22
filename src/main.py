@@ -146,10 +146,8 @@ class PCF8575Multiplex(PCF8575):
             self.reset_pins()
 
         for x in self._rows:
-            _temporary = []
             self.write_pin(x, "LOW")
-            for y in self._column:
-                _temporary.append(self.read_pin(y))
+            _temporary = [self.read_pin(y) for y in self._columns]
             self.write_pin(x, "HIGH")
             _data.append(_temporary)
 

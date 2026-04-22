@@ -51,18 +51,8 @@ class PCF8575:
         :param pin: Uses board pin out (P07-P00 P17-P10)
         :return: True if GND, False if VCC
         """
-        # TODO optimize code, maybe change to bitwise or just rewrite this is so shit
         _data = self.read_all()
-        _data = _data.hex()
-        _data = int(_data, 16)
-        _data = f'{_data:016b}'
-
-        _data = f"{"".join(reversed(_data[0:8]))}{"".join(reversed(_data[8:16]))}"
-
-        if pin // 10 == 0:
-            return not bool(_data[pin])
-        else:
-            return not bool(_data[pin - 2])
+        return not bool((_data[pin // 10] >> (pin % 10)) & 1)
 
     def write_all(self, data: bytearray) -> None:
         """

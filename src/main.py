@@ -99,7 +99,7 @@ class PCF8575:
         if value not in ["HIGH", "LOW"]:
             raise InvalidPin("Set state is not a valid state")
 
-        _temp_pin_mode = self._pin_mode
+        _temp_pin_mode = self._pin_mode[:]
 
         if value == "HIGH":
             _temp_pin_mode[0 if (pin // 10) == 0 else 1] |= (1 << (pin % 10))

@@ -1,6 +1,5 @@
-from machine import I2C, Pin
 import time
-from functools import wraps
+from machine import Pin
 
 
 # Exceptions
@@ -10,26 +9,94 @@ class InputMismatch(Exception):
 class InvalidPin(Exception):
     pass
 
-
-# Helper Functions
-def execution_time(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        start = time.ticks_us()
-        data = f(*args, **kwargs)
-        end = time.ticks_us()
-        diff = time.ticks_diff(end, start)
-        print(f"Execution time: {diff} microseconds")
-
-        return data
-    return wrapper
+class InvalidValue(Exception):
+    pass
 
 
 # Classes
+class RaspPiPico2W:
+    from machine import I2C, Pin
+
+    VALID_PINS = set(range(29))
+
+    I2C_VALID_PINS = {
+        0: {"sda": {0, 4, 8, 12, 16, 20}, "scl": {1, 5, 9, 13, 17, 21}},
+        1: {"sda": {2, 6, 10, 14, 18, 26}, "scl": {3, 7, 11, 15, 19, 27}}
+    }
+
+    def __init__(self) -> None:
+        self._claimed_pin = set()
+
+    def claim_pin(self, pin: int) -> None:
+        if pin in self._claimed_pin:
+            raise ValueError(f"Pin {pin} already claimed!")
+        self._claimed_pin.add(pin)
+
+    def validate_i2c_pin(self, port: int, sda: int, scl: int) -> bool:
+        if port not in self.I2C_VALID_PINS:
+            raise ValueError("Invalid I2C Bus ID (Must be 0 or 1).")
+
+        valid_sda = self.I2C_VALID_PINS[port]["sda"]
+        valid_scl = self.I2C_VALID_PINS[port]["scl"]
+
+        if sda not in valid_sda or scl not in valid_scl:
+            raise ValueError(f"Invalid SDA ({sda}) or SCL ({scl}) for I2C bus {port}")
+        return True
+
+
+class GPIOPin():
+    from machine import I2C, Pin
+
+    VALID_MODES = [Pin.IN, Pin.OUT, Pin.OPEN_DRAIN, Pin.ALT]
+    VALID_PULL = [None, Pin.PULL_UP, Pin.PULL_DOWN]
+    VALID_VALUE = [True, False, None]
+
+    def __init__(self, device: RaspPiPico2W, pin: int, mode: Pin = Pin.IN, pull: Pin = Pin.PULL_UP, value: bool | None = None) -> None:
+        from machine import Pin
+
+        if pin not in device.VALID_PINS:
+            raise InvalidPin(f"Pin {pin} not valid!")
+        if mode not in self.VALID_MODES:
+            raise InvalidValue(f"Invalid mode {mode}!")
+        if pull not in self.VALID_PULL:
+            raise InvalidValue(f"Invalid pull {pull}!")
+        if value not in self.VALID_VALUE:
+            raise InvalidValue(f"Invalid value {value}!")
+
+        device.claim_pin(pin)
+
+        self._pin_num = pin
+        self._mode = mode
+        self._pull = pull
+        self._value = value
+
+        self.pin = Pin(self._pin_num, mode=self._mode, pull=self._pull, value=self._value)
+
+    def get_state(self) -> bool:
+        return self.pin.value()
+
+    def set_pin(self, state: bool | int) -> None:
+        if state:
+            self.pin.on()
+        else:
+            self.pin.off()
+
+    def pin_toggle(self) -> None:
+        self.pin.toggle()
+
+
 class I2CBus:
-    def __init__(self, port, sda=Pin(0), scl=Pin(1), freq=100000) -> None:
-        self.i2c = I2C(port, sda=sda, scl=scl, freq=freq)
+    def __init__(self, device: RaspPiPico2W, port, sda=0, scl=1, freq=100000) -> None:
+        from machine import I2C, Pin
+
+        if not device.validate_i2c_pin(port, sda, scl):
+            raise InvalidPin(f"Port {port} doesn't match SDA {sda} / SCL {scl} or SDA {sda} / SCL {scl} isn't valid!")
+
+        self.i2c = I2C(port, sda=Pin(sda), scl=Pin(scl), freq=freq)
         self._claimed_addresses = set()
+
+        for pin in [sda, scl]:
+            device.claim_pin(pin)
 
     def __str__(self) -> list[str]:
         return self.scan(print_output=False)
@@ -40,6 +107,10 @@ class I2CBus:
         self._claimed_addresses.add(address)
 
     def scan(self, print_output=True) -> list[str]:
+        """
+        Scans all available addresses in I2C Bus
+        :return: List of available addresses
+        """
         _available_addresses = []
         for item in self.i2c.scan():
             _available_addresses.append(hex(item))
@@ -81,11 +152,9 @@ class PCF8575:
             raise ValueError(f"Pin {pin} already claimed!")
         self._claimed_pins.add(pin)
 
-    @property
     def current_pin_state(self) -> bytearray:
         return self._pin_mode
 
-    @property
     def read_all(self) -> bytes:
         return self._bus.readfrom(self._address, 2)
 
@@ -149,7 +218,7 @@ class PCF8575Multiplex(PCF8575):
             raise ValueError(f"XY {xy} already claimed!")
         self._claimed_xy.add(xy)
 
-    def reset_pins(self):
+    def reset_pins(self) -> None:
         for r in self._rows:
             self.write_pin(r, "HIGH")
         for c in self._column:
@@ -172,7 +241,14 @@ class PCF8575Multiplex(PCF8575):
 
         return _data
 
+    #! NOT SURE IF OUTPUT IS REVERSED
     def read_pin_from_grid(self, row, column, safe=False) -> bool:
+        """
+        Single position check, much faster than whole grid check.
+        :param row: row number
+        :param column: column number
+        :return: True if grid is HIGH, False if grid is LOW
+        """
         if row not in self._rows or column not in self._column:
             raise InvalidPin("Pin is not present in multiplex, please recheck row and column arguments")
 
@@ -186,6 +262,34 @@ class PCF8575Multiplex(PCF8575):
         return _state
 
 
+class HC595():
+    def __init__(self, device: RaspPiPico2W, serin: int = 0, rclk: int = 1, srclk: int = 2) -> None:
+        self._serin = GPIOPin(device, serin, Pin.OUT, None)
+        self._rclk = GPIOPin(device, rclk, Pin.OUT, None)
+        self._srclk = GPIOPin(device, srclk, Pin.OUT, None)
+
+    def write_data(self, data: bytearray = bytearray([0x00])) -> None:
+        """
+        Writes data to the shift register
+        :param data: data to write, bytes to write to shift register. starting from MSB, multiple bytes can be inputted for chained shift registers. 1: ON, 0: OFF
+        """
+        # latch off
+        self._rclk.set_pin(False)
+
+        data_to_send = reversed([(byte >> (7 - i)) & 1 for byte in data for i in range(8)])
+
+        for bit in data_to_send:
+            # data bit
+            self._serin.set_pin(bit)
+
+            # pulse clock
+            self._srclk.set_pin(True)
+            self._srclk.set_pin(False)
+
+        # latch on
+        self._rclk.set_pin(True)
+
+
 class Switch:
     def __init__(self, read_func, debounce_ms=20) -> None:
         self._debounce_ms = debounce_ms
@@ -197,6 +301,9 @@ class Switch:
 
     @classmethod
     def from_pin(cls, pcf_device: PCF8575, pin_number: int, debounce=20):
+        """
+        Creates a switch using a normal pin
+        """
         pcf_device.write_pin(pin_number, "HIGH")
         pcf_device.claim_pin(pin_number)
 
@@ -206,12 +313,16 @@ class Switch:
 
     @classmethod
     def from_matrix(cls, multiplex_device: PCF8575Multiplex, xy: tuple[int, int], debounce=20):
+        """
+        Creates a switch using a multiplex grid
+        """
         multiplex_device.claim_xy(xy)
 
         read_func = lambda: multiplex_device.read_pin_from_grid(xy[0], xy[1])
 
         return cls(read_func, debounce_ms=debounce)
 
+    #! NOT SURE IF OUTPUT IS REVERSED
     def get_state(self) -> bool:
         raw_reading = self._read_method()
 
@@ -234,15 +345,26 @@ class Switch:
         return self.get_state()
 
 if __name__ == "__main__":
-    i2c_bus = I2CBus(0, sda=Pin(16), scl=Pin(17), freq=100000)
+    rasppi = RaspPiPico2W()
 
-    # pcf1 = PCF8575(i2c_bus, address=0x23)
-    pcf1 = PCF8575Multiplex(i2c_bus, [0, 1, 2, 3, 4, 5, 6, 7], [10, 11, 12, 13, 14, 15, 16, 17], address=0x23)
-
-    switch1 = Switch.from_matrix(pcf1, (0, 10))
-
-    # switch1 = Switch(pcf1, 0)
+    hc = HC595(rasppi)
 
     while True:
-        print(switch1.get_state())
-        time.sleep(0.05)
+        hc.write_data(bytearray([0xFF, 0xFF]))
+        time.sleep(0.5)
+        hc.write_data(bytearray([0x00, 0x00]))
+        time.sleep(0.5)
+        hc.write_data(bytearray([0xA3, 0xFF]))
+        time.sleep(0.5)
+
+    # i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
+
+    # pcf1 = PCF8575(i2c_bus, address=0x23)
+    # pcf1 = PCF8575Multiplex(i2c_bus, [0, 1, 2, 3, 4, 5, 6, 7], [10, 11, 12, 13, 14, 15, 16, 17], address=0x23)
+
+    # switch1 = Switch.from_matrix(pcf1, (0, 10))
+    # switch1 = Switch.from_pin(pcf1, 0)
+
+    # while True:
+    #     print(switch1.get_state())
+    #     time.sleep(0.05)

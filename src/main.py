@@ -1,6 +1,6 @@
 from machine import I2C, Pin
 import time
-from functools import wraps, classmethod
+from functools import wraps
 
 
 # Exceptions
@@ -81,9 +81,11 @@ class PCF8575:
             raise ValueError(f"Pin {pin} already claimed!")
         self._claimed_pins.add(pin)
 
+    @property
     def current_pin_state(self) -> bytearray:
         return self._pin_mode
 
+    @property
     def read_all(self) -> bytes:
         return self._bus.readfrom(self._address, 2)
 
@@ -122,6 +124,7 @@ class PCF8575:
         else:
             _temp_pin_mode[0 if (pin // 10) == 0 else 1] &= ~(1 << (pin % 10))
 
+        self._pin_mode = _temp_pin_mode
         self.write_all(self._pin_mode)
 
 
@@ -184,7 +187,7 @@ class PCF8575Multiplex(PCF8575):
 
 
 class Switch:
-    def __init__(self, gpio_device: PCF8575 | PCF8575Multiplex, pin: int | tuple[int, int], debounce_ms=20) -> None:
+    def __init__(self, read_func, debounce_ms=20) -> None:
         self._debounce_ms = debounce_ms
         self._current_stable_state = False
         self._last_state_reading = False
@@ -203,9 +206,9 @@ class Switch:
 
     @classmethod
     def from_matrix(cls, multiplex_device: PCF8575Multiplex, xy: tuple[int, int], debounce=20):
-        multiplex_device.claim_pin(xy)
+        multiplex_device.claim_xy(xy)
 
-        read_func = lambda: multiplex_device.read_pin_from_grid(xy)
+        read_func = lambda: multiplex_device.read_pin_from_grid(xy[0], xy[1])
 
         return cls(read_func, debounce_ms=debounce)
 
@@ -226,6 +229,9 @@ class Switch:
         else:
             return raw_reading
 
+    @property
+    def is_pressed(self):
+        return self.get_state()
 
 if __name__ == "__main__":
     i2c_bus = I2CBus(0, sda=Pin(16), scl=Pin(17), freq=100000)
@@ -233,7 +239,7 @@ if __name__ == "__main__":
     # pcf1 = PCF8575(i2c_bus, address=0x23)
     pcf1 = PCF8575Multiplex(i2c_bus, [0, 1, 2, 3, 4, 5, 6, 7], [10, 11, 12, 13, 14, 15, 16, 17], address=0x23)
 
-    switch1 = Switch(pcf1, (0, 10))
+    switch1 = Switch.from_matrix(pcf1, (0, 10))
 
     # switch1 = Switch(pcf1, 0)
 

@@ -1,5 +1,7 @@
 from machine import I2C, Pin
 import time
+from functools import wraps, classmethod
+
 
 # Exceptions
 class InputMismatch(Exception):
@@ -7,6 +9,20 @@ class InputMismatch(Exception):
 
 class InvalidPin(Exception):
     pass
+
+
+# Helper Functions
+def execution_time(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        start = time.ticks_us()
+        data = f(*args, **kwargs)
+        end = time.ticks_us()
+        diff = time.ticks_diff(end, start)
+        print(f"Execution time: {diff} microseconds")
+
+        return data
+    return wrapper
 
 
 # Classes
@@ -169,33 +185,32 @@ class PCF8575Multiplex(PCF8575):
 
 class Switch:
     def __init__(self, gpio_device: PCF8575 | PCF8575Multiplex, pin: int | tuple[int, int], debounce_ms=20) -> None:
-        if type(gpio_device) is PCF8575 and isinstance(pin, tuple):
-            raise InputMismatch("GPIO Device does not match pin input or vise versa.")
-        if type(gpio_device) is PCF8575Multiplex and isinstance(pin, int):
-            raise InputMismatch("GPIO Device does not match pin input or vise versa.")
-
-        self._gpio_device = gpio_device
-        self._pin = pin
-
-        if type(gpio_device) is PCF8575 and isinstance(self._pin, int):
-            self._gpio_device.write_pin(self._pin, "HIGH")
-            self._read_method = self._gpio_device.read_pin
-            gpio_device.claim_pin(self._pin)
-        elif type(gpio_device) is PCF8575Multiplex and isinstance(pin, tuple):
-            self._read_method = self._gpio_device.read_pin_from_grid
-            gpio_device.claim_pin(self._pin)
-
         self._debounce_ms = debounce_ms
-
         self._current_stable_state = False
         self._last_state_reading = False
         self._last_time_changed = time.ticks_ms()
 
+        self._read_method = read_func
+
+    @classmethod
+    def from_pin(cls, pcf_device: PCF8575, pin_number: int, debounce=20):
+        pcf_device.write_pin(pin_number, "HIGH")
+        pcf_device.claim_pin(pin_number)
+
+        read_func = lambda: pcf_device.read_pin(pin_number)
+
+        return cls(read_func, debounce_ms=debounce)
+
+    @classmethod
+    def from_matrix(cls, multiplex_device: PCF8575Multiplex, xy: tuple[int, int], debounce=20):
+        multiplex_device.claim_pin(xy)
+
+        read_func = lambda: multiplex_device.read_pin_from_grid(xy)
+
+        return cls(read_func, debounce_ms=debounce)
+
     def get_state(self) -> bool:
-        if isinstance(self._pin, int):
-            raw_reading = self._gpio_device.read_pin(self._pin)
-        else:
-            raw_reading = self._gpio_device.read_pin_from_grid(self._pin[0], self._pin[1])
+        raw_reading = self._read_method()
 
         if self._debounce_ms != 0:
             now = time.ticks_ms()
@@ -225,10 +240,3 @@ if __name__ == "__main__":
     while True:
         print(switch1.get_state())
         time.sleep(0.05)
-
-    # start = time.ticks_us()
-    # print(switch1.get_state())
-    # end = time.ticks_us()
-    # diff = time.ticks_diff(end, start)
-    #
-    # print(f"Execution time: {diff} microseconds")

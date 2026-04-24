@@ -104,7 +104,6 @@ class I2CBus:
 
         self._stop_on_error = stop_on_error
 
-
     def __str__(self) -> list[str]:
         return self.scan(print_output=False)
 
@@ -148,7 +147,6 @@ class I2CBus:
             else:
                 print(f"I2C Write Error: {e}")
 
-    #! Add caching for this function
     def writeto_mem(self, addr, memaddr, buf) -> None:
         try:
             self.i2c.writeto_mem(addr, memaddr, buf)

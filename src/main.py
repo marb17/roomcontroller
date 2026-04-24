@@ -1,5 +1,6 @@
 import time
-from machine import Pin
+from machine import Pin, WDT
+import gc
 
 
 # Exceptions
@@ -89,7 +90,7 @@ class GPIOPin:
 
 
 class I2CBus:
-    def __init__(self, device: RaspPiPico2W, port, sda=0, scl=1, freq=100000) -> None:
+    def __init__(self, device: RaspPiPico2W, port, sda=0, scl=1, freq=100000, stop_on_error=False) -> None:
         from machine import I2C, Pin
 
         if not device.validate_i2c_pin(port, sda, scl):
@@ -100,6 +101,9 @@ class I2CBus:
 
         for pin in [sda, scl]:
             device.claim_pin(pin)
+
+        self._stop_on_error = stop_on_error
+
 
     def __str__(self) -> list[str]:
         return self.scan(print_output=False)
@@ -124,19 +128,41 @@ class I2CBus:
         return _available_addresses
 
     def readfrom(self, addr, nbytes) -> bytes:
-        return self.i2c.readfrom(addr, nbytes)
+        try:
+            _data = self.i2c.readfrom(addr, nbytes)
+            self._readfrom_cache = _data
+            return _data
+        except Exception as e:
+            if self._stop_on_error or self._readfrom_cache is None:
+                raise e
+            else:
+                print(f"I2C Read Error: {e}")
+                return self._readfrom_cache
 
     def writeto(self, addr, buf) -> None:
-        self.i2c.writeto(addr, buf)
+        try:
+            self.i2c.writeto(addr, buf)
+        except Exception as e:
+            if self._stop_on_error:
+                raise e
+            else:
+                print(f"I2C Write Error: {e}")
 
+    #! Add caching for this function
     def writeto_mem(self, addr, memaddr, buf) -> None:
-        self.i2c.writeto_mem(addr, memaddr, buf)
+        try:
+            self.i2c.writeto_mem(addr, memaddr, buf)
+        except Exception as e:
+            if self._stop_on_error:
+                raise e
+            print(f"I2C Mem-Write Error: {e}")
 
 
 class PCF8575:
-    def __init__(self, i2c_bus: I2CBus, address: int = 0x20) -> None:
+    def __init__(self, i2c_bus: I2CBus, address: int = 0x20, cache_lifetime=50) -> None:
         """
         Defaults all pins as INPUT / HIGH
+        :param cache_lifetime: If -1, cache is disabled and will always recall data. When set above 1, cache is enabled and will only recall data if the last read was more than cache_lifetime milliseconds ago.
         """
         i2c_bus.claim_address(address)
 
@@ -150,6 +176,10 @@ class PCF8575:
 
         self.write_all(bytearray([0xFF, 0xFF]))
 
+        self._cache_lifetime = cache_lifetime
+        self._cache = None
+        self._last_called = time.ticks_ms()
+
     def claim_pin(self, pin: int) -> None:
         if pin in self._claimed_pins:
             raise ValueError(f"Pin {pin} already claimed!")
@@ -158,8 +188,16 @@ class PCF8575:
     def current_pin_state(self) -> bytearray:
         return self._pin_mode
 
-    def read_all(self) -> bytes:
-        return self._bus.readfrom(self._address, 2)
+    def read_all(self, force=False) -> bytes:
+        if self._cache_lifetime == -1:
+            return self._bus.readfrom(self._address, 2)
+        else:
+            now = time.ticks_ms()
+            if time.ticks_diff(now, self._last_called) > self._cache_lifetime or force or self._cache is None:
+                self._cache = self._bus.readfrom(self._address, 2)
+                self._last_called = now
+
+            return self._cache
 
     def read_pin(self, pin: int) -> bool:
         """
@@ -172,12 +210,26 @@ class PCF8575:
         _data = self.read_all()
         return not bool((_data[pin // 10] >> (pin % 10)) & 1)
 
+    def read_pins(self, pins: list[int]) -> list[bool]:
+        """
+        :param pins: Uses board pin out (P07-P00 P17-P10), allows multiple pins to be read at once
+        :return: List of True if GND, False if VCC
+        """
+        _data = self.read_all()
+        return [not bool((_data[pin // 10] >> (pin % 10)) & 1) for pin in pins]
+
     def write_all(self, data: bytearray) -> None:
         """
         :param data: Inputs two bytes to be written, 1 = HIGH : 0 = LOW
         """
         self._pin_mode = data
-        self._bus.i2c.writeto(self._address, self._pin_mode)
+        self._bus.writeto(self._address, self._pin_mode)
+
+    def _edit_bit(self, value: str | bool, pin: int) -> None:
+        if value == "HIGH" or value == True:
+            self._pin_mode[0 if (pin // 10) == 0 else 1] |= (1 << (pin % 10))
+        else:
+            self._pin_mode[0 if (pin // 10) == 0 else 1] &= ~(1 << (pin % 10))
 
     def write_pin(self, pin: int, value: str | bool) -> None:
         """
@@ -189,16 +241,12 @@ class PCF8575:
         if value not in ["HIGH", "LOW"]:
             raise InvalidPin("Set state is not a valid state")
 
-        _temp_pin_mode = self._pin_mode[:]
+        self._edit_bit(value, pin)
 
-        if value == "HIGH" or value == True:
-            _temp_pin_mode[0 if (pin // 10) == 0 else 1] |= (1 << (pin % 10))
-        else:
-            _temp_pin_mode[0 if (pin // 10) == 0 else 1] &= ~(1 << (pin % 10))
-
-        self._pin_mode = _temp_pin_mode
         self.write_all(self._pin_mode)
 
+    def update_pin(self, pin: int, value: bool | str) -> None:
+        self._edit_bit(value, pin)
 
 class PCF8575Multiplex(PCF8575):
     def __init__(self, i2c_bus: I2CBus, rows: list[int], column: list[int], address: int = 0x20) -> None:
@@ -209,12 +257,14 @@ class PCF8575Multiplex(PCF8575):
         self._rows = rows
         self._column = column
 
-        self.reset_pins()
-
         for r in self._rows:
             self.claim_pin(r)
         for c in self._column:
             self.claim_pin(c)
+
+        self.reset_pins()
+
+        self._col_index_map = {c: i for i, c in enumerate(self._column)}
 
     def claim_xy(self, xy: tuple[int, int]) -> None:
         if xy in self._claimed_xy:
@@ -227,8 +277,9 @@ class PCF8575Multiplex(PCF8575):
         for c in self._column:
             self.write_pin(c, "HIGH")
 
-    def read_grid(self, safe=False) -> list[list[bool]]:
+    def read_grid(self, safe=False) -> list[bool]:
         """
+        :param safe: Always resets pins to HIGH, EXTREMELY SLOW
         :return: A nested list [x][y]; x being the row and y being the column in respect with the list given during initialization
         """
         _data = []
@@ -238,19 +289,16 @@ class PCF8575Multiplex(PCF8575):
 
         for x in self._rows:
             self.write_pin(x, "LOW")
-            _temporary = [self.read_pin(y) for y in self._column]
+            _temporary = self.read_pins(self._column)
             self.write_pin(x, "HIGH")
             _data.append(_temporary)
 
         return _data
 
-    #! NOT SURE IF OUTPUT IS REVERSED
     def read_pin_from_grid(self, row, column, safe=False) -> bool:
         """
-        Single position check, much faster than whole grid check.
-        :param row: row number
-        :param column: column number
-        :param safe: Always resets pins to HIGH
+        Single position check, much faster than a whole grid check.
+        :param safe: Always resets pins to HIGH, EXTREMELY SLOW
         :return: True if grid is HIGH, False if grid is LOW
         """
         if row not in self._rows or column not in self._column:
@@ -264,6 +312,41 @@ class PCF8575Multiplex(PCF8575):
         self.write_pin(row, "HIGH")
 
         return _state
+
+    def read_pins_from_grid(self, xy_list: list[tuple[int, int]], safe=False):
+        """
+        Checks multiples grid positions and optimized for speed by caching the same row's result. Best way to check multiple positions. Fastest way and should be always be used if possible.
+        :param xy_list: List of tuples (row, column)
+        :param safe: Always resets pins to HIGH, EXTREMELY SLOW
+        :return: List of True if grid is HIGH, False if grid is LOW
+        """
+        for xy in xy_list:
+            if xy[0] not in self._rows or xy[1] not in self._column:
+                raise InvalidPin("Pin is not present in multiplex, please recheck row and column arguments")
+
+        _data = []
+
+        if safe:
+            self.reset_pins()
+
+        _previous_row = -1
+        _data_cache = []
+
+        for xy in xy_list:
+            if _previous_row != xy[0]:
+                if _previous_row != -1:
+                    self.update_pin(_previous_row, "HIGH")
+                self.write_pin(xy[0], "LOW")
+                _previous_row = xy[0]
+
+                _data_cache = self.read_pins(self._column)
+
+            _data.append(_data_cache[self._col_index_map[xy[1]]])
+
+        if _previous_row != -1:
+            self.write_pin(_previous_row, "HIGH")
+
+        return _data
 
 
 class HC595:
@@ -284,7 +367,7 @@ class HC595:
     def write_data(self, data: bytearray = bytearray([0x00])) -> None:
         """
         Writes data to the shift register
-        :param data: data to write, bytes to write to shift register. starting from MSB, multiple bytes can be inputted for chained shift registers. 1: ON, 0: OFF
+        :param data: data to write, bytes to write to shift register. Starting from MSB, multiple bytes can be inputted for chained shift registers. 1: ON, 0: OFF
         """
         self._shift_data = data
 
@@ -357,6 +440,64 @@ class SegmentDisplay:
         self._device.write_data()
 
 
+class RotarySwitch:
+    def __init__(self, switch_objects: list, device: PCF8575 | PCF8575Multiplex, pins: list[tuple[int, int]] | list[int], mode: str) -> None:
+        self._switch_objects = switch_objects
+        self._mode = mode
+        self._pins = pins
+        self._device = device
+
+    @classmethod
+    def from_pin(cls, pcf_device: PCF8575, pins: list[int]):
+        switches = [Switch.from_pin(pcf_device, pin) for pin in pins]
+
+        return cls(switches, pcf_device, pins, mode="pin")
+
+    @classmethod
+    def from_matrix(cls, multiplex_device: PCF8575Multiplex, xy: list[tuple[int, int]]):
+        switches = [Switch.from_matrix(multiplex_device, item) for item in xy]
+
+        return cls(switches, multiplex_device, xy, mode="matrix")
+
+    def _read_states(self) -> list[bool]:
+        if self._mode == "pin":
+            data = self._device.read_all()
+            return [not bool((data[pin // 10] >> (pin % 10)) & 1) for pin in self._pins]
+        if self._mode == "matrix":
+            return self._device.read_pins_from_grid(self._pins)
+        return None
+
+    def get_state(self, safe=False) -> int | None:
+        """
+        :return: Returns the position of the rotary switch, None if the signal is not stable
+        """
+        _states = self._read_states()
+
+        if safe:
+            if _states.count(True) > 1:
+                return None
+            else:
+                try:
+                    return _states.index(True)
+                except ValueError:
+                    return None
+        else:
+            try:
+                return _states.index(True)
+            except ValueError:
+                return None
+
+    def get_pos_state(self, pos) -> bool:
+        """
+        :return: Returns if a specific position is True, the same speed as get_state()
+        """
+        _data = self._read_states()
+        return _data[pos]
+
+    @property
+    def position(self) -> int | None:
+        return self.get_state()
+
 
 class Switch:
     def __init__(self, read_func, debounce_ms=20) -> None:
@@ -390,7 +531,6 @@ class Switch:
 
         return cls(read_func, debounce_ms=debounce)
 
-    #! NOT SURE IF OUTPUT IS REVERSED
     def get_state(self) -> bool:
         raw_reading = self._read_method()
 
@@ -412,27 +552,27 @@ class Switch:
     def is_pressed(self):
         return self.get_state()
 
-if __name__ == "__main__":
-    rasppi = RaspPiPico2W()
 
-    hc = HC595(rasppi)
+#! Helper Functions, delete after done testing
+def execution_time(f):
+    def wrapper(*args, **kwargs):
+        start = time.ticks_us()
+        data = f(*args, **kwargs)
+        end = time.ticks_us()
+        diff = time.ticks_diff(end, start)
+        print(f"Execution time: {diff} microseconds")
+
+        return data
+    return wrapper
+
+
+if __name__ == "__main__":
+    wdt = WDT(timeout=8000)
+    rasppi = RaspPiPico2W()
+    i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
+    pcf1 = PCF8575(i2c_bus, address=0x23)
 
     while True:
-        hc.write_data(bytearray([0xFF, 0xFF]))
-        time.sleep(0.5)
-        hc.write_data(bytearray([0x00, 0x00]))
-        time.sleep(0.5)
-        hc.write_data(bytearray([0xA3, 0xFF]))
-        time.sleep(0.5)
+        wdt.feed()
+        gc.collect()
 
-    # i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
-
-    # pcf1 = PCF8575(i2c_bus, address=0x23)
-    # pcf1 = PCF8575Multiplex(i2c_bus, [0, 1, 2, 3, 4, 5, 6, 7], [10, 11, 12, 13, 14, 15, 16, 17], address=0x23)
-
-    # switch1 = Switch.from_matrix(pcf1, (0, 10))
-    # switch1 = Switch.from_pin(pcf1, 0)
-
-    # while True:
-    #     print(switch1.get_state())
-    #     time.sleep(0.05)

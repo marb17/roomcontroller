@@ -12,6 +12,9 @@ class InvalidPin(Exception):
 class InvalidValue(Exception):
     pass
 
+class InvalidSetup(Exception):
+    pass
+
 
 # Classes
 class RaspPiPico2W:
@@ -44,7 +47,7 @@ class RaspPiPico2W:
         return True
 
 
-class GPIOPin():
+class GPIOPin:
     from machine import I2C, Pin
 
     VALID_MODES = [Pin.IN, Pin.OUT, Pin.OPEN_DRAIN, Pin.ALT]
@@ -73,7 +76,7 @@ class GPIOPin():
         self.pin = Pin(self._pin_num, mode=self._mode, pull=self._pull, value=self._value)
 
     def get_state(self) -> bool:
-        return self.pin.value()
+        return bool(self.pin.value())
 
     def set_pin(self, state: bool | int) -> None:
         if state:
@@ -176,7 +179,7 @@ class PCF8575:
         self._pin_mode = data
         self._bus.i2c.writeto(self._address, self._pin_mode)
 
-    def write_pin(self, pin: int, value: str) -> None:
+    def write_pin(self, pin: int, value: str | bool) -> None:
         """
         :param pin: Uses board pin out (P07-P00 P17-P10)
         :param value: str of "HIGH" or "LOW" to set pin mode
@@ -188,7 +191,7 @@ class PCF8575:
 
         _temp_pin_mode = self._pin_mode[:]
 
-        if value == "HIGH":
+        if value == "HIGH" or value == True:
             _temp_pin_mode[0 if (pin // 10) == 0 else 1] |= (1 << (pin % 10))
         else:
             _temp_pin_mode[0 if (pin // 10) == 0 else 1] &= ~(1 << (pin % 10))
@@ -235,7 +238,7 @@ class PCF8575Multiplex(PCF8575):
 
         for x in self._rows:
             self.write_pin(x, "LOW")
-            _temporary = [self.read_pin(y) for y in self._columns]
+            _temporary = [self.read_pin(y) for y in self._column]
             self.write_pin(x, "HIGH")
             _data.append(_temporary)
 
@@ -247,6 +250,7 @@ class PCF8575Multiplex(PCF8575):
         Single position check, much faster than whole grid check.
         :param row: row number
         :param column: column number
+        :param safe: Always resets pins to HIGH
         :return: True if grid is HIGH, False if grid is LOW
         """
         if row not in self._rows or column not in self._column:
@@ -262,21 +266,32 @@ class PCF8575Multiplex(PCF8575):
         return _state
 
 
-class HC595():
+class HC595:
     def __init__(self, device: RaspPiPico2W, serin: int = 0, rclk: int = 1, srclk: int = 2) -> None:
         self._serin = GPIOPin(device, serin, Pin.OUT, None)
         self._rclk = GPIOPin(device, rclk, Pin.OUT, None)
         self._srclk = GPIOPin(device, srclk, Pin.OUT, None)
+
+        self._shift_data = bytearray([0x00])
+
+        self._claimed_pins = set()
+
+    def claim_pin(self, pin: int) -> None:
+        if pin in self._claimed_pins:
+            raise InvalidPin(f"Pin {pin} already claimed")
+        self._claimed_pins.add(pin)
 
     def write_data(self, data: bytearray = bytearray([0x00])) -> None:
         """
         Writes data to the shift register
         :param data: data to write, bytes to write to shift register. starting from MSB, multiple bytes can be inputted for chained shift registers. 1: ON, 0: OFF
         """
+        self._shift_data = data
+
         # latch off
         self._rclk.set_pin(False)
 
-        data_to_send = reversed([(byte >> (7 - i)) & 1 for byte in data for i in range(8)])
+        data_to_send = reversed([(byte >> (7 - i)) & 1 for byte in self._shift_data for i in range(8)])
 
         for bit in data_to_send:
             # data bit
@@ -288,6 +303,59 @@ class HC595():
 
         # latch on
         self._rclk.set_pin(True)
+
+    def update_data(self, pin: int, value: bool | str) -> None:
+        """
+        Writes a pin and without updating the display
+        """
+        if value == True or value == "HIGH":
+            self._shift_data[pin // 8] |= 1 << (7 - (pin % 8))
+        else:
+            self._shift_data[pin // 8] &= ~(1 << (7 - (pin % 8)))
+
+    def write_pin(self, pin: int, value: bool | str) -> None:
+        """
+        Writes a pin and updates the display
+        """
+        self.update_data(pin, value)
+        self.write_data(self._shift_data)
+
+
+class SegmentDisplay:
+    CHAR_SET = {0 : [1, 1, 1, 1, 1, 1, 0],
+              1 : [0, 1, 1, 0, 0, 0, 0],
+              2 : [1, 1, 0, 1, 1, 0, 1],
+              3 : [1, 1, 1, 1, 0, 0, 1],
+              4 : [0, 1, 1, 0, 0, 1, 1],
+              5 : [1, 0, 1, 1, 0, 1, 1],
+              6 : [1, 0, 1, 1, 1, 1, 1],
+              7 : [1, 1, 1, 0, 0, 0, 0],
+              8 : [1, 1, 1, 1, 1, 1, 1],
+              9 : [1, 1, 1, 1, 0, 0, 1]}
+
+    def __init__(self, device: HC595, pins: list[int] ) -> None:
+        if len(pins) != 7:
+            raise InvalidSetup(f"There are {len(pins)}!")
+        if len(pins) != len(set(pins)):
+            raise InvalidSetup(f"Pin are not unique!")
+
+        self._device = device
+        self._pins = pins
+
+        for pin in self._pins:
+            device.claim_pin(pin)
+
+    def write_to_display(self, char: int) -> None:
+        if char not in self.CHAR_SET.keys():
+            raise InvalidValue("Set character is not a valid character!")
+
+        _set_pins = self.CHAR_SET[char]
+
+        for pin, bit in zip(self._pins, _set_pins):
+            self._device.update_data(pin, bool(bit))
+
+        self._device.write_data()
+
 
 
 class Switch:

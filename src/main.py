@@ -49,7 +49,7 @@ class RaspPiPico2W:
 
 
 class GPIOPin:
-    from machine import I2C, Pin
+    from machine import Pin
 
     VALID_MODES = [Pin.IN, Pin.OUT, Pin.OPEN_DRAIN, Pin.ALT]
     VALID_PULL = [None, Pin.PULL_UP, Pin.PULL_DOWN]
@@ -79,8 +79,8 @@ class GPIOPin:
     def get_state(self) -> bool:
         return bool(self.pin.value())
 
-    def set_pin(self, state: bool | int) -> None:
-        if state:
+    def set_pin(self, state: bool | int | str) -> None:
+        if state == True or state == "HIGH" or state == 1:
             self.pin.on()
         else:
             self.pin.off()
@@ -95,6 +95,8 @@ class I2CBus:
 
         if not device.validate_i2c_pin(port, sda, scl):
             raise InvalidPin(f"Port {port} doesn't match SDA {sda} / SCL {scl} or SDA {sda} / SCL {scl} isn't valid!")
+
+        self.device = device
 
         self.i2c = I2C(port, sda=Pin(sda), scl=Pin(scl), freq=freq)
         self._claimed_addresses = set()
@@ -240,7 +242,7 @@ class PCF8575:
         """
         if pin not in self._valid_pins:
             raise InvalidPin("Pin is not present in PCF8575")
-        if value not in ["HIGH", "LOW"]:
+        if value not in ["HIGH", "LOW", True, False]:
             raise InvalidPin("Set state is not a valid state")
 
         self._edit_bit(value, pin)
@@ -406,6 +408,38 @@ class HC595:
         self.write_data(self._shift_data)
 
 
+class OutputPin:
+    def __init__(self, write_method) -> None:
+        self._write_method = write_method
+
+    @classmethod
+    def from_gpio(cls, pin: int, device: RaspPiPico2W, invert: bool = False):
+        gpio_obj = GPIOPin(device, pin, Pin.OUT, None)
+
+        def write_method(value: bool | str, invert: bool = False):
+            if value == True or value == "HIGH":
+                gpio_obj.set_pin(True if not invert else False)
+            else:
+                gpio_obj.set_pin(False if not invert else True)
+
+        return cls(write_method)
+
+    @classmethod
+    def from_pcf8575(cls, device: PCF8575, pin: int,  invert: bool = False):
+        device.claim_pin(pin)
+
+        def write_method(value: bool | str):
+            if value == True or value == "HIGH":
+                device.write_pin(pin, True if not invert else False)
+            else:
+                device.write_pin(pin, False if not invert else True)
+
+        return cls(write_method)
+
+    def write_pin(self, value: bool | str) -> None:
+        self._write_method(value)
+
+
 class SegmentDisplay:
     CHAR_SET = {0 : [1, 1, 1, 1, 1, 1, 0],
               1 : [0, 1, 1, 0, 0, 0, 0],
@@ -556,16 +590,100 @@ class Switch:
 
 
 class PCA9685:
-    def __init__(self, device: RaspPiPico2W, port: int, sda: int = 16, scl: int = 17, address: int = 0x40) -> None:
+    MODE1_ADDR = 0x00
+    PRE_SCALE_ADDR = 0xFE
+
+    def __init__(self, device: I2CBus, address: int = 0x40, min_max_range: tuple[float, float]=(2.625, 15.875), oe_pin: None | OutputPin=None) -> None:
+        """
+        :param min_max_range: Min and max range of the servo, in duty cycle. Default is 2.625 to 15.875. Not min max range of the servo, but the range of the duty cycle.
+        :param oe_pin: Output pin to enable the PCA9685. If not given, the PCA9685 will not be enabled. Requires a OutputPin object to be used.
+        """
         self._device = device
         self._address = address
+        self._min_max_range = min_max_range
+
+        self._oe_pin = oe_pin
 
         self._pwm_freq = 50
+        self._prescale_value = round((25000000 / (4096 * self._pwm_freq)) - 1)
 
-        if not self._device.validate_i2c_pin(port, sda, scl):
-            raise InvalidPin(f"Port {port} doesn't match SDA {sda} / SCL {scl} or SDA {sda} / SCL {scl} isn't valid!")
+        self._device.claim_address(self._address)
+
+        self._initialize_device()
+
+        self._claimed_channels = set()
+
+    def claim_channel(self, channel: int) -> None:
+        if channel in self._claimed_channels:
+            raise InvalidPin(f"Channel {channel} already claimed!")
+        self._claimed_channels.add(channel)
+
+    def _initialize_device(self) -> None:
+        # auto-increment enable, low-power mode
+        self._device.writeto_mem(self._address, self.MODE1_ADDR, bytearray([0x19]))
+        time.sleep_ms(15)
+        # set pwm frequency
+        self._device.writeto_mem(self._address, self.PRE_SCALE_ADDR, bytearray([self._prescale_value]))
+        time.sleep_ms(15)
+        # sleep mode disable
+        self._device.writeto_mem(self._address, self.MODE1_ADDR, bytearray([0x21]))
+        time.sleep_ms(15)
+        # restart
+        self._device.writeto_mem(self._address, self.MODE1_ADDR, bytearray([0xA1]))
+        time.sleep_ms(15)
+
+    def write_duty_cycle(self, channel: int, duty_cycle: float) -> None:
+        if channel not in range(16):
+            raise InvalidValue(f"Channel {channel} is not a valid channel!")
+
+        _off_count = round((duty_cycle / 100) * 4095)
+        _off_count = _off_count.to_bytes(2, "big")
+
+        print(f"{hex(_off_count[0])} {hex(_off_count[1])}")
+
+        self._device.writeto_mem(self._address, 0x06 + (channel * 4), bytearray([0x00, 0x00, _off_count[1], _off_count[0]]))
+
+    def write_angle(self, channel: int, angle: float, min_max_movement: tuple[float, float]=(3.1, 15)) -> None:
+        """
+        :param min_max_movement: The duty cycles of position 0 and 180. Differ from min_max_range, which is the range of the servo.
+        """
+        if channel not in range(16):
+            raise InvalidValue(f"Channel {channel} is not a valid channel!")
+        if min_max_movement[0] < self._min_max_range[0]:
+            raise InvalidValue(f"Min movement {min_max_movement[0]} is less than min range {self._min_max_range[0]}!")
+        if min_max_movement[1] > self._min_max_range[1]:
+            raise InvalidValue(f"Max movement {min_max_movement[1]} is greater than max range {self._min_max_range[1]}!")
+
+        _duty_cycle = ((angle / 180) * (min_max_movement[1] - min_max_movement[0])) + min_max_movement[0]
+        self.write_duty_cycle(channel, _duty_cycle)
+
+    def oe_pin_enable(self, value: bool | str) -> None:
+        if self._oe_pin is None:
+            raise InvalidSetup("No OE pin is set!")
+
+        if value == True or value == "HIGH":
+            self._oe_pin.write_pin(False)
+        else:
+            self._oe_pin.write_pin(True)
 
 
+class Servo:
+    def __init__(self, device: PCA9685, channel: int, min_max_range: tuple[float, float]=(2.625, 15.875), min_max_movement: tuple[float, float]=(3.1, 15)) -> None:
+        device.claim_channel(channel)
+
+        self._device = device
+        self._channel = channel
+        self._min_max_range = min_max_range
+        self._min_max_movement = min_max_movement
+
+    def servo_write_angle(self, angle: float):
+        self._device.write_angle(self._channel, angle, self._min_max_movement)
+
+    def enable_output(self, enable: bool | str = True) -> None:
+        if enable == True or enable == "HIGH":
+            self._device.oe_pin_enable(True)
+        else:
+            self._device.oe_pin_enable(False)
 
 
 #! Helper Functions, delete after done testing
@@ -588,17 +706,18 @@ if __name__ == "__main__":
     pcf1 = PCF8575(i2c_bus, 0x23)
     switch = Switch.from_pin(pcf1, 0)
 
-    pca = PCA9685(rasppi, 0, 16, 17)
+    outputpin = OutputPin.from_pcf8575(pcf1, 1)
 
-    servo = PWM(Pin(18), freq=50, duty_u16=5000)
+    pca = PCA9685(i2c_bus, address=0x40, oe_pin=outputpin)
+    servo = Servo(pca, 0)
 
     while True:
         # wdt.feed()
         # gc.collect()
-        if switch.is_pressed:
-            servo.duty_u16(1638)
-            print('low')
-        else:
-            servo.duty_u16(8191)
-            print('high')
-        time.sleep(0.1)
+        for i in range(2):
+            servo.servo_write_angle(i * 180)
+
+            if switch.is_pressed:
+                servo.enable_output(False)
+            else:
+                servo.enable_output(True)

@@ -1,5 +1,5 @@
 import time
-from machine import Pin, WDT
+from machine import Pin, WDT, PWM
 import gc
 
 
@@ -134,9 +134,12 @@ class I2CBus:
             return _data
         except Exception as e:
             if self._stop_on_error or self._readfrom_cache is None:
+                if self._readfrom_cache is None:
+                    print("Nothing in cache")
+                    print(f"I2C Read Error: {e}, Address: {addr}, NBytes: {nbytes}")
                 raise e
             else:
-                print(f"I2C Read Error: {e}")
+                print(f"I2C Read Error: {e}, Address: {addr}, NBytes: {nbytes}")
                 return self._readfrom_cache
 
     def writeto(self, addr, buf) -> None:
@@ -146,7 +149,7 @@ class I2CBus:
             if self._stop_on_error:
                 raise e
             else:
-                print(f"I2C Write Error: {e}")
+                print(f"I2C Write Error: {e}, Address: {addr}, Buffer: {buf}")
 
     def writeto_mem(self, addr, memaddr, buf) -> None:
         try:
@@ -154,7 +157,7 @@ class I2CBus:
         except Exception as e:
             if self._stop_on_error:
                 raise e
-            print(f"I2C Mem-Write Error: {e}")
+            print(f"I2C Mem-Write Error: {e}, Address: {addr}, Memory Address: {memaddr}, Buffer: {buf}")
 
 
 class PCF8575:
@@ -552,12 +555,17 @@ class Switch:
         return self.get_state()
 
 
-class PCA9685
-    def __init__(self, i2c_bus: I2CBus, sda: int = 16, sdl: int = 17, address: int = 0x40) -> None:
-        self._device = i2c_bus
+class PCA9685:
+    def __init__(self, device: RaspPiPico2W, port: int, sda: int = 16, scl: int = 17, address: int = 0x40) -> None:
+        self._device = device
         self._address = address
 
-        self._device.validate_i2c_pin(sda, scl)
+        self._pwm_freq = 50
+
+        if not self._device.validate_i2c_pin(port, sda, scl):
+            raise InvalidPin(f"Port {port} doesn't match SDA {sda} / SCL {scl} or SDA {sda} / SCL {scl} isn't valid!")
+
+
 
 
 #! Helper Functions, delete after done testing
@@ -574,13 +582,23 @@ def execution_time(f):
 
 
 if __name__ == "__main__":
-    wdt = WDT(timeout=8000)
+    # wdt = WDT(timeout=8000)
     rasppi = RaspPiPico2W()
     i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
     pcf1 = PCF8575(i2c_bus, 0x23)
     switch = Switch.from_pin(pcf1, 0)
 
+    pca = PCA9685(rasppi, 0, 16, 17)
+
+    servo = PWM(Pin(18), freq=50, duty_u16=5000)
+
     while True:
-        wdt.feed()
-        gc.collect()
-        print(switch.is_pressed)
+        # wdt.feed()
+        # gc.collect()
+        if switch.is_pressed:
+            servo.duty_u16(1638)
+            print('low')
+        else:
+            servo.duty_u16(8191)
+            print('high')
+        time.sleep(0.1)

@@ -103,6 +103,7 @@ class I2CBus:
             device.claim_pin(pin)
 
         self._stop_on_error = stop_on_error
+        self._readfrom_cache = None
 
     def __str__(self) -> list[str]:
         return self.scan(print_output=False)
@@ -551,6 +552,14 @@ class Switch:
         return self.get_state()
 
 
+class PCA9685
+    def __init__(self, i2c_bus: I2CBus, sda: int = 16, sdl: int = 17, address: int = 0x40) -> None:
+        self._device = i2c_bus
+        self._address = address
+
+        self._device.validate_i2c_pin(sda, scl)
+
+
 #! Helper Functions, delete after done testing
 def execution_time(f):
     def wrapper(*args, **kwargs):
@@ -568,9 +577,10 @@ if __name__ == "__main__":
     wdt = WDT(timeout=8000)
     rasppi = RaspPiPico2W()
     i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
-    pcf1 = PCF8575(i2c_bus, address=0x23)
+    pcf1 = PCF8575(i2c_bus, 0x23)
+    switch = Switch.from_pin(pcf1, 0)
 
     while True:
         wdt.feed()
         gc.collect()
-
+        print(switch.is_pressed)

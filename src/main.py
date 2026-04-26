@@ -355,6 +355,8 @@ class PCF8575Multiplex(PCF8575):
 
 class HC595:
     def __init__(self, device: RaspPiPico2W, serin: int = 0, rclk: int = 1, srclk: int = 2) -> None:
+        self._device = device
+
         self._serin = GPIOPin(device, serin, Pin.OUT, None)
         self._rclk = GPIOPin(device, rclk, Pin.OUT, None)
         self._srclk = GPIOPin(device, srclk, Pin.OUT, None)
@@ -362,6 +364,8 @@ class HC595:
         self._shift_data = bytearray([0x00])
 
         self._claimed_pins = set()
+
+    # TODO add OE pin
 
     def claim_pin(self, pin: int) -> None:
         if pin in self._claimed_pins:
@@ -703,21 +707,13 @@ if __name__ == "__main__":
     # wdt = WDT(timeout=8000)
     rasppi = RaspPiPico2W()
     i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
-    pcf1 = PCF8575(i2c_bus, 0x23)
-    switch = Switch.from_pin(pcf1, 0)
+    # pcf1 = PCF8575(i2c_bus, 0x23)
+    # switch = Switch.from_pin(pcf1, 0)
 
-    outputpin = OutputPin.from_pcf8575(pcf1, 1)
+    hc = HC595(rasppi, 13, 12, 11)
 
-    pca = PCA9685(i2c_bus, address=0x40, oe_pin=outputpin)
-    servo = Servo(pca, 0)
 
     while True:
+
         # wdt.feed()
         # gc.collect()
-        for i in range(2):
-            servo.servo_write_angle(i * 180)
-
-            if switch.is_pressed:
-                servo.enable_output(False)
-            else:
-                servo.enable_output(True)

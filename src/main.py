@@ -714,6 +714,6 @@ if __name__ == "__main__":
 
 
     while True:
-
+        pass
         # wdt.feed()
         # gc.collect()

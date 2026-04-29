@@ -98,3 +98,5 @@ class RemoteLogic:
 if __name__ == "__main__":
     remote = RemoteLogic()
     print(remote.output_bits())
+    remote.change_power(True)
+    print(remote.output_bits())

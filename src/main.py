@@ -446,15 +446,21 @@ class OutputPin:
 
 class SegmentDisplay:
     CHAR_SET = {0 : [1, 1, 1, 1, 1, 1, 0],
-              1 : [0, 1, 1, 0, 0, 0, 0],
-              2 : [1, 1, 0, 1, 1, 0, 1],
-              3 : [1, 1, 1, 1, 0, 0, 1],
-              4 : [0, 1, 1, 0, 0, 1, 1],
-              5 : [1, 0, 1, 1, 0, 1, 1],
-              6 : [1, 0, 1, 1, 1, 1, 1],
-              7 : [1, 1, 1, 0, 0, 0, 0],
-              8 : [1, 1, 1, 1, 1, 1, 1],
-              9 : [1, 1, 1, 1, 0, 0, 1]}
+                1 : [0, 1, 1, 0, 0, 0, 0],
+                2 : [1, 1, 0, 1, 1, 0, 1],
+                3 : [1, 1, 1, 1, 0, 0, 1],
+                4 : [0, 1, 1, 0, 0, 1, 1],
+                5 : [1, 0, 1, 1, 0, 1, 1],
+                6 : [1, 0, 1, 1, 1, 1, 1],
+                7 : [1, 1, 1, 0, 0, 0, 0],
+                8 : [1, 1, 1, 1, 1, 1, 1],
+                9 : [1, 1, 1, 0, 0, 1, 1],
+                'A' : [1, 1, 1, 0, 1, 1, 1],
+                'B' : [0, 0, 1, 1, 1, 1, 1],
+                'C' : [0, 0, 0, 1, 1, 0, 1],
+                'D' : [0, 1, 1, 1, 1, 0, 1],
+                'E' : [1, 0, 0, 1, 1, 1, 1],
+                'F' : [1, 0, 0, 0, 1, 1, 1]}
 
     def __init__(self, device: HC595, pins: list[int] ) -> None:
         if len(pins) != 7:
@@ -706,14 +712,25 @@ def execution_time(f):
 if __name__ == "__main__":
     # wdt = WDT(timeout=8000)
     rasppi = RaspPiPico2W()
-    i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
+    # i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
     # pcf1 = PCF8575(i2c_bus, 0x23)
     # switch = Switch.from_pin(pcf1, 0)
 
-    hc = HC595(rasppi, 13, 12, 11)
-
+    hc = HC595(rasppi, 0, 1, 2)
+    # pcf = PCA9685(i2c_bus, 0x40, (2.625, 15.875), OutputPin.from_gpio(18, rasppi))
+    sevenseg = SegmentDisplay(hc, [0, 1, 2, 3, 4, 5, 6])
+    # servo = Servo(pcf, 0)
 
     while True:
-        pass
+        # hc.write_data(bytearray([0xFF, 0xFF]))
+        for i in range(10):
+            sevenseg.write_to_display(i)
+            time.sleep(0.5)
+        for i in ['A', 'B', 'C', 'D', 'E', 'F']:
+            sevenseg.write_to_display(i)
+            time.sleep(0.5)
+        # servo.servo_write_angle(180)
+        # time.sleep(0.5)
+        # servo.servo_write_angle(0)
         # wdt.feed()
         # gc.collect()

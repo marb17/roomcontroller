@@ -353,9 +353,42 @@ class PCF8575Multiplex(PCF8575):
         return _data
 
 
+class OutputPin:
+    def __init__(self, write_method) -> None:
+        self._write_method = write_method
+
+    @classmethod
+    def from_gpio(cls, pin: int, device: RaspPiPico2W, invert: bool = False):
+        gpio_obj = GPIOPin(device, pin, Pin.OUT, None)
+
+        def write_method(value: bool | str, invert: bool = False):
+            if value == True or value == "HIGH":
+                gpio_obj.set_pin(True if not invert else False)
+            else:
+                gpio_obj.set_pin(False if not invert else True)
+
+        return cls(write_method)
+
+    @classmethod
+    def from_pcf8575(cls, device: PCF8575, pin: int,  invert: bool = False):
+        device.claim_pin(pin)
+
+        def write_method(value: bool | str):
+            if value == True or value == "HIGH":
+                device.write_pin(pin, True if not invert else False)
+            else:
+                device.write_pin(pin, False if not invert else True)
+
+        return cls(write_method)
+
+    def write_pin(self, value: bool | str) -> None:
+        self._write_method(value)
+
+
 class HC595:
-    def __init__(self, device: RaspPiPico2W, serin: int = 0, rclk: int = 1, srclk: int = 2) -> None:
+    def __init__(self, device: RaspPiPico2W, serin: int = 0, rclk: int = 1, srclk: int = 2, oe_pin: None | OutputPin=None) -> None:
         self._device = device
+        self._oe_pin = oe_pin
 
         self._serin = GPIOPin(device, serin, Pin.OUT, None)
         self._rclk = GPIOPin(device, rclk, Pin.OUT, None)
@@ -365,7 +398,17 @@ class HC595:
 
         self._claimed_pins = set()
 
-    # TODO add OE pin
+    def oe_pin_enable(self, value: bool | str) -> None:
+        """
+        Globally disables output
+        """
+        if self._oe_pin is None:
+            raise InvalidSetup("No OE pin is set!")
+
+        if value == True or value == "HIGH":
+            self._oe_pin.write_pin(False)
+        else:
+            self._oe_pin.write_pin(True)
 
     def claim_pin(self, pin: int) -> None:
         if pin in self._claimed_pins:
@@ -412,38 +455,6 @@ class HC595:
         self.write_data(self._shift_data)
 
 
-class OutputPin:
-    def __init__(self, write_method) -> None:
-        self._write_method = write_method
-
-    @classmethod
-    def from_gpio(cls, pin: int, device: RaspPiPico2W, invert: bool = False):
-        gpio_obj = GPIOPin(device, pin, Pin.OUT, None)
-
-        def write_method(value: bool | str, invert: bool = False):
-            if value == True or value == "HIGH":
-                gpio_obj.set_pin(True if not invert else False)
-            else:
-                gpio_obj.set_pin(False if not invert else True)
-
-        return cls(write_method)
-
-    @classmethod
-    def from_pcf8575(cls, device: PCF8575, pin: int,  invert: bool = False):
-        device.claim_pin(pin)
-
-        def write_method(value: bool | str):
-            if value == True or value == "HIGH":
-                device.write_pin(pin, True if not invert else False)
-            else:
-                device.write_pin(pin, False if not invert else True)
-
-        return cls(write_method)
-
-    def write_pin(self, value: bool | str) -> None:
-        self._write_method(value)
-
-
 class SegmentDisplay:
     CHAR_SET = {0 : [1, 1, 1, 1, 1, 1, 0],
                 1 : [0, 1, 1, 0, 0, 0, 0],
@@ -470,6 +481,7 @@ class SegmentDisplay:
 
         self._device = device
         self._pins = pins
+        self._data = None
 
         for pin in self._pins:
             device.claim_pin(pin)
@@ -478,12 +490,21 @@ class SegmentDisplay:
         if char not in self.CHAR_SET.keys():
             raise InvalidValue("Set character is not a valid character!")
 
+        self._data = self.CHAR_SET[char]
         _set_pins = self.CHAR_SET[char]
 
         for pin, bit in zip(self._pins, _set_pins):
             self._device.update_data(pin, bool(bit))
 
         self._device.write_data()
+
+    def disable_display(self, value: bool) -> None:
+        if value:
+            for pin in self._pins:
+                self._device.update_data(pin, False)
+        else:
+            for pin, bit in zip(self._pins, self._data):
+                self._device.update_data(pin, bool(bit))
 
 
 class RotarySwitch:
@@ -668,6 +689,9 @@ class PCA9685:
         self.write_duty_cycle(channel, _duty_cycle)
 
     def oe_pin_enable(self, value: bool | str) -> None:
+        """
+        Globally disables output
+        """
         if self._oe_pin is None:
             raise InvalidSetup("No OE pin is set!")
 
@@ -689,7 +713,10 @@ class Servo:
     def servo_write_angle(self, angle: float):
         self._device.write_angle(self._channel, angle, self._min_max_movement)
 
-    def enable_output(self, enable: bool | str = True) -> None:
+    def global_enable_output(self, enable: bool | str = True) -> None:
+        """
+        Globally disables output
+        """
         if enable == True or enable == "HIGH":
             self._device.oe_pin_enable(True)
         else:

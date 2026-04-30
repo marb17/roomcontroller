@@ -203,7 +203,7 @@ class PCF8575:
 
             return self._cache
 
-    def read_pin(self, pin: int) -> bool:
+    def read_pin(self, pin: int, force=False) -> bool:
         """
         :param pin: Uses board pin out (P07-P00 P17-P10)
         :return: True if GND, False if VCC
@@ -211,15 +211,15 @@ class PCF8575:
         if pin not in self._valid_pins:
             raise InvalidPin("Pin is not present in PCF8575")
 
-        _data = self.read_all()
+        _data = self.read_all(force=force)
         return not bool((_data[pin // 10] >> (pin % 10)) & 1)
 
-    def read_pins(self, pins: list[int]) -> list[bool]:
+    def read_pins(self, pins: list[int], force=False) -> list[bool]:
         """
         :param pins: Uses board pin out (P07-P00 P17-P10), allows multiple pins to be read at once
         :return: List of True if GND, False if VCC
         """
-        _data = self.read_all()
+        _data = self.read_all(force=force)
         return [not bool((_data[pin // 10] >> (pin % 10)) & 1) for pin in pins]
 
     def write_all(self, data: bytearray) -> None:
@@ -293,7 +293,7 @@ class PCF8575Multiplex(PCF8575):
 
         for x in self._rows:
             self.write_pin(x, "LOW")
-            _temporary = self.read_pins(self._column)
+            _temporary = self.read_pins(self._column, force=True)
             self.write_pin(x, "HIGH")
             _data.append(_temporary)
 
@@ -312,7 +312,7 @@ class PCF8575Multiplex(PCF8575):
             self.reset_pins()
 
         self.write_pin(row, "LOW")
-        _state = self.read_pin(column)
+        _state = self.read_pin(column, force=True)
         self.write_pin(row, "HIGH")
 
         return _state
@@ -343,7 +343,7 @@ class PCF8575Multiplex(PCF8575):
                 self.write_pin(xy[0], "LOW")
                 _previous_row = xy[0]
 
-                _data_cache = self.read_pins(self._column)
+                _data_cache = self.read_pins(self._column, force=True)
 
             _data.append(_data_cache[self._col_index_map[xy[1]]])
 

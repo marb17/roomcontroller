@@ -202,10 +202,10 @@ class I2CBus:
             if self._stop_on_error or (addr not in self._readfrom_cache):
                 if addr not in self._readfrom_cache:
                     print("Nothing in cache")
-                    print(f"I2C Read Error: {e}, Address: {addr}, NBytes: {nbytes}")
+                    print(f"I2C Read Error: {e}, Address: {hex(addr)}, NBytes: {nbytes}")
                 raise e
             else:
-                print(f"I2C Read Error: {e}, Address: {addr}, NBytes: {nbytes}")
+                print(f"I2C Read Error: {e}, Address: {hex(addr)}, NBytes: {nbytes}")
                 return self._readfrom_cache[addr]
 
     def writeto(self, addr: int, buf: bytes | bytearray) -> None:
@@ -220,7 +220,7 @@ class I2CBus:
             if self._stop_on_error:
                 raise e
             else:
-                print(f"I2C Write Error: {e}, Address: {addr}, Buffer: {buf}")
+                print(f"I2C Write Error: {e}, Address: {hex(addr)}, Buffer: {buf}")
 
     def writeto_mem(self, addr: int, memaddr: int, buf: bytes | bytearray) -> None:
         """
@@ -234,7 +234,7 @@ class I2CBus:
         except Exception as e:
             if self._stop_on_error:
                 raise e
-            print(f"I2C Mem-Write Error: {e}, Address: {addr}, Memory Address: {memaddr}, Buffer: {buf}")
+            print(f"I2C Mem-Write Error: {e}, Address: {hex(addr)}, Memory Address: {memaddr}, Buffer: {buf}")
 
 
 class PCF8575:
@@ -629,6 +629,29 @@ class HC595:
         self.write_data(self._shift_data)
 
 
+class LED:
+    def __init__(self, shift_register: HC595, pin: int):
+        self._shift_register = shift_register
+        self._pin = pin
+        self._value = False
+
+        self._shift_register.claim_pin(self._pin)
+
+    def write_led(self, value: bool | str) -> None:
+        if value == True or value == "HIGH":
+            self._value = True
+        else:
+            self._value = False
+
+        self._shift_register.write_pin(self._pin, self._value)
+
+    def enable_output(self, value: bool | str) -> None:
+        if value == True or value == "HIGH":
+            self._shift_register.write_pin(self._pin, self._value)
+        else:
+            self._shift_register.write_pin(self._pin, False)
+
+
 class SegmentDisplay:
     CHAR_SET = {0 : [1, 1, 1, 1, 1, 1, 0],
                 1 : [0, 1, 1, 0, 0, 0, 0],
@@ -988,6 +1011,32 @@ class Servo:
             self._device.oe_pin_enable(False)
 
 
+class KorrySwitch:
+    def __init__(self, input_switch: Switch, led1: LED, led2: LED,
+                 condition1: Callable[[any], bool],
+                 condition2: Callable[[any], bool]) -> None:
+        """
+        :param input_switch: Switch object
+        :param led1: LED object 1 (top LED)
+        :param led2: LED object 2 (bottom LED)
+        :param condition1: Condition 1 for top LED
+        :param condition2: Condition 2 for bottom LED
+        """
+        self._input_switch = input_switch
+        self._led1 = led1
+        self._led2 = led2
+        self._condition1 = condition1
+        self._condition2 = condition2
+
+    def get_switch_state(self) -> bool:
+        return self._input_switch.get_state()
+
+    def update(self, context: any) -> None:
+        if self._condition1(context):
+            # TODO finish pls
+            ...
+
+
 #! Helper Functions, delete after done testing
 def execution_time(f):
     def wrapper(*args, **kwargs):
@@ -1004,25 +1053,14 @@ def execution_time(f):
 if __name__ == "__main__":
     # wdt = WDT(timeout=8000)
     rasppi = RaspPiPico2W()
-    # i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000)
-    # pcf1 = PCF8575(i2c_bus, 0x23)
-    # switch = Switch.from_pin(pcf1, 0)
-
+    i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000, stop_on_error=True)
+    pcf1 = PCF8575(i2c_bus, 0x23)
     hc = HC595(rasppi, 0, 1, 2)
-    # pcf = PCA9685(i2c_bus, 0x40, (2.625, 15.875), OutputPin.from_gpio(18, rasppi))
-    sevenseg = SegmentDisplay(hc, [0, 1, 2, 3, 4, 5, 6])
-    # servo = Servo(pcf, 0)
+
+    panel_context = {}
 
     while True:
-        # hc.write_data(bytearray([0xFF, 0xFF]))
-        for i in range(10):
-            sevenseg.write_to_display(i)
-            time.sleep(0.5)
-        for i in ['A', 'B', 'C', 'D', 'E', 'F']:
-            sevenseg.write_to_display(i)
-            time.sleep(0.5)
-        # servo.servo_write_angle(180)
-        # time.sleep(0.5)
-        # servo.servo_write_angle(0)
-        # wdt.feed()
-        # gc.collect()
+        time.sleep(0.1)
+        hc.write_pin(0, True)
+        time.sleep(0.1)
+        hc.write_pin(1, True)

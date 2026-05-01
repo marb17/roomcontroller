@@ -20,8 +20,6 @@ class InvalidSetup(Exception):
 
 # Classes
 class RaspPiPico2W:
-    from machine import I2C, Pin
-
     VALID_PINS = set(range(29))
 
     I2C_VALID_PINS = {
@@ -67,7 +65,7 @@ class GPIOPin:
     VALID_PULL = [None, Pin.PULL_UP, Pin.PULL_DOWN]
     VALID_VALUE = [True, False, None]
 
-    def __init__(self, device: RaspPiPico2W, pin: int, mode: int = Pin.IN, pull: int = Pin.PULL_UP,
+    def __init__(self, device: RaspPiPico2W, pin: int, mode: int = Pin.IN, pull: int | None = Pin.PULL_UP,
                  value: bool | None = None) -> None:
         """
         :param device: RaspPiPico2W object
@@ -358,6 +356,7 @@ class PCF8575:
         :param value: str of "HIGH" or "LOW" / boolean to set pin mode
         """
         self._edit_bit(value, pin)
+
 
 class PCF8575Multiplex(PCF8575):
     ROWS = [0, 1, 2, 3, 4, 5, 6, 7]
@@ -1029,12 +1028,26 @@ class KorrySwitch:
         self._condition2 = condition2
 
     def get_switch_state(self) -> bool:
+        """
+        Outputs the state of the switch
+        :return: boolean of the switch state
+        """
         return self._input_switch.get_state()
 
-    def update(self, context: any) -> None:
+    def update(self, context: dict[str, Switch | LED]) -> None:
+        """
+        Updates the LEDs based on the set conditions
+        :param context: Context object containing all objects
+        """
         if self._condition1(context):
-            # TODO finish pls
-            ...
+            self._led1.write_led(True)
+        else:
+            self._led1.write_led(False)
+
+        if self._condition2(context):
+            self._led2.write_led(True)
+        else:
+            self._led2.write_led(False)
 
 
 #! Helper Functions, delete after done testing
@@ -1057,10 +1070,18 @@ if __name__ == "__main__":
     pcf1 = PCF8575(i2c_bus, 0x23)
     hc = HC595(rasppi, 0, 1, 2)
 
-    panel_context = {}
+    switch_1 = Switch.from_pin(pcf1, 0)
+    led1 = LED(hc, 0)
+    led2 = LED(hc, 1)
+
+    panel_context = {"battery_sw": switch_1,
+                     "battery_on_led": led1,
+                     "battery_fault_led": led2}
+
+    korry = KorrySwitch(switch_1, led1, led2,
+                        lambda context: context["battery_sw"].get_state(),
+                        lambda context: context["battery_sw"].get_state() == False)
 
     while True:
         time.sleep(0.1)
-        hc.write_pin(0, True)
-        time.sleep(0.1)
-        hc.write_pin(1, True)
+        korry.update(panel_context)

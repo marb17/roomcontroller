@@ -1,7 +1,6 @@
 import time
-from machine import Pin, WDT, PWM
+from machine import Pin, PWM
 from typing import Callable
-import gc
 
 
 # Exceptions
@@ -1027,6 +1026,7 @@ class KorrySwitch:
         self._condition1 = condition1
         self._condition2 = condition2
 
+    @property
     def get_switch_state(self) -> bool:
         """
         Outputs the state of the switch
@@ -1049,6 +1049,238 @@ class KorrySwitch:
         else:
             self._led2.write_led(False)
 
+
+class ACRemote:
+    from enum import IntEnum
+
+    class ACMode(IntEnum):
+        AUTO = 0
+        COOL = 1
+        DRY = 2
+        FAN = 3
+        HEAT = 4
+
+    class ACFanSpeed(IntEnum):
+        AUTO = 0
+        LOW = 1
+        MEDIUM = 2
+        HIGH = 3
+
+    class ACSwing(IntEnum):
+        OFF = 0
+        FULL = 1
+        HIGH = 2
+        MIDDLE_HIGH = 3
+        MIDDLE = 4
+        MIDDLE_LOW = 5
+        LOW = 6
+        SWING_LOW = 7
+        SWING_MIDDLE = 8
+        SWING_HIGH = 9
+
+    class ACTemperatureReading(IntEnum):
+        OFF = 0
+        INDOOR_SET = 1
+        INDOOR_AMBIENT = 2
+        OUTDOOR_AMBIENT = 3
+
+    def __init__(self, device: GPIOPin, pin: int = 0) -> None:
+        """
+        :param device: GPIOPin object
+        :param pin: Pin to use for the AC remote
+        """
+        self.enabled = False
+        self.mode = self.ACMode.AUTO
+        self.fan_speed = self.ACFanSpeed.AUTO
+        self.view_temp = self.ACTemperatureReading.OFF
+        self.swing_mode = self.ACSwing.OFF
+        self.target_temp = 25
+        self.sleep = False
+        self.turbo = False
+        self.light = False
+        self.x_fan = False
+        self.timer_enabled = False
+        self.timer_hour = 0
+
+        self._device = device
+        self._pin = pin
+
+    # region properties and setters
+    """
+    All parameters that can be set are listed here.  
+    """
+    @property
+    def enabled(self) -> bool:
+        return self.enabled
+
+    @enabled.setter
+    def enabled(self, value: bool | str):
+        if value == True or value == "HIGH":
+            self.enabled = True
+        else:
+            self.enabled = False
+
+    @property
+    def mode(self) -> ACMode:
+        return self.mode
+
+    @mode.setter
+    def mode(self, value: ACMode) -> None:
+        if value == self.ACMode.AUTO:
+            self.target_temp = 25
+            self.sleep = False
+        if value == self.ACMode.FAN:
+            self.ACFanSpeed = self.ACFanSpeed.LOW
+            self.sleep = False
+        if value == self.ACMode.COOL:
+            self.turbo = False
+            self.x_fan = False
+        if value == self.ACMode.HEAT:
+            self.turbo = False
+        if value == self.ACMode.DRY:
+            self.x_fan = False
+
+        self.mode = value
+
+    @property
+    def fan_speed(self) -> ACFanSpeed:
+        return self.fan_speed
+
+    @fan_speed.setter
+    def fan_speed(self, value: ACFanSpeed) -> None:
+        if value == self.ACMode.FAN:
+            raise InvalidValue("Fan speed cannot be changed when in FAN mode!")
+
+        self.fan_speed = value
+
+    @property
+    def view_temp(self) -> ACTemperatureReading:
+        return self.view_temp
+
+    @view_temp.setter
+    def view_temp(self, value: ACTemperatureReading) -> None:
+        self.view_temp = value
+
+    @property
+    def swing_mode(self) -> ACSwing:
+        return self.swing_mode
+
+    @swing_mode.setter
+    def swing_mode(self, value: ACSwing) -> None:
+        self.swing_mode = value
+
+    @property
+    def target_temp(self) -> int:
+        return self.target_temp
+
+    @target_temp.setter
+    def target_temp(self, value: int) -> None:
+        if 30 < value < 16:
+            raise InvalidValue(f"Target temperature must be between 30 and 16 degrees!")
+        if self.mode == self.ACMode.AUTO:
+            raise InvalidValue(f"Target temperature cannot be set when in AUTO mode!")
+
+        self.target_temp = value
+
+    @property
+    def sleep(self) -> bool:
+        if self.mode in [self.ACMode.AUTO, self.ACMode.FAN]:
+            raise InvalidValue(f"Cannot set sleep mode when in AUTO or FAN mode!")
+
+        return self.sleep
+
+    @sleep.setter
+    def sleep(self, value: bool | str):
+        if self.mode not in (self.ACMode.COOL, self.ACMode.DRY):
+            raise InvalidSetup("Sleep is not available in AUTO, FAN or HEAT modes!")
+        if value == True or value == "HIGH":
+            self.sleep = True
+        else:
+            self.sleep = False
+
+    @property
+    def turbo(self) -> bool:
+        return self.turbo
+
+    @turbo.setter
+    def turbo(self, value: bool | str):
+        if self.mode not in (self.ACMode.COOL, self.ACMode.HEAT):
+            raise InvalidSetup("Turbo is not available in DRY, FAN, or AUTO mode!")
+        if value == True or value == "HIGH":
+            self.turbo = True
+        else:
+            self.turbo = False
+
+    @property
+    def light(self) -> bool:
+        return self.light
+
+    @light.setter
+    def light(self, value: bool | str):
+        if value == True or value == "HIGH":
+            self.light = True
+        else:
+            self.light = False
+
+    @property
+    def x_fan(self) -> bool:
+        return self.x_fan
+
+    @x_fan.setter
+    def x_fan(self, value: bool | str):
+        if value == True or value == "HIGH":
+            self.x_fan = True
+        else:
+            self.x_fan = False
+
+    @property
+    def timer_enabled(self) -> bool:
+        return self.timer_enabled
+
+    @timer_enabled.setter
+    def timer_enabled(self, value: bool | str):
+        if value == True or value == "HIGH":
+            self.timer_enabled = True
+        else:
+            self.timer_enabled = False
+            self.timer_hour = 0
+
+    @property
+    def timer_hour(self) -> int:
+        return self.timer_hour
+
+    @timer_hour.setter
+    def timer_hour(self, value: float) -> None:
+        if 0.5 > value > 24:
+            raise InvalidValue(f"Timer hour must be between 0.5 and 24!")
+        if value % 0.5 != 0:
+            raise InvalidValue(f"Timer hour must be a multiple of 0.5!")
+        if not self.timer_enabled:
+            raise InvalidSetup("Timer must be enabled to set the timer hour!")
+
+        self.timer_hour = value
+
+    # endregion
+
+    @staticmethod
+    def _get_timer_bits(hours: float) -> str:
+        if 0.5 > hours > 24:
+            raise InvalidValue(f"Timer hour must be between 0.5 and 24!")
+        if hours % 0.5 != 0:
+            raise InvalidValue(f"Timer hour must be a multiple of 0.5!")
+
+        hours_2x = int(hours * 2)
+
+        nibble_2_offset = hours_2x % 16
+
+        # TODO pls finish
+
+    def _calculate_bits(self) -> str:
+        """
+        Calculates the bits to send to the AC remote using the set parameters of the object
+        :return: str of bits
+        """
+        ...
 
 #! Helper Functions, delete after done testing
 def execution_time(f):

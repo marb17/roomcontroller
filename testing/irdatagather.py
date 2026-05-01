@@ -1,7 +1,7 @@
 from machine import Pin
 import time
 
-ir_pin = Pin(0, Pin.IN, Pin.PULL_UP)
+ir_pin = Pin(12, Pin.IN, Pin.PULL_UP)
 
 prev_pin_value = ir_pin.value()
 prev_time = time.ticks_us()
@@ -68,7 +68,7 @@ while True:
 
     if ticks_diff > 100000 and temp and len(temp) > 2:
         data.append(temp)
-        print(temp)
+        # print(temp)
         processed_data = process_data(temp)
         # print(processed_data)
         try:

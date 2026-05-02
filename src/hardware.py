@@ -1,6 +1,7 @@
 import time
-from machine import Pin, PWM
+from machine import Pin, PWM, I2C
 from typing import Callable
+from enum import IntEnum
 
 
 # Exceptions
@@ -58,8 +59,6 @@ class RaspPiPico2W:
 
 
 class GPIOPin:
-    from machine import Pin
-
     VALID_MODES = [Pin.IN, Pin.OUT, Pin.OPEN_DRAIN, Pin.ALT]
     VALID_PULL = [None, Pin.PULL_UP, Pin.PULL_DOWN]
     VALID_VALUE = [True, False, None]
@@ -73,8 +72,6 @@ class GPIOPin:
         :param pull: Whether to use the onboard pull-up/down resistors, [None, Pin.PULL_UP, Pin.PULL_DOWN]
         :param value: Whether to set the pin value to [None, True, False] depending on Pin.MODE
         """
-        from machine import Pin
-
         if pin not in device.VALID_PINS:
             raise InvalidPin(f"Pin {pin} not valid!")
         if mode not in self.VALID_MODES:
@@ -117,6 +114,64 @@ class GPIOPin:
         self.pin.toggle()
 
 
+class GPIOPWM:
+    def __init__(self, device: RaspPiPico2W, pin: int, freq: int = 38000) -> None:
+        """
+        Creates a PWM pin out
+        :param device: RaspPiPico2Wm object
+        :param pin: Pin to use
+        :param freq: Frequency of PWM cycle
+        """
+        device.claim_pin(pin)
+
+        self._freq = freq
+        self._pin = pin
+        self._duty = 0
+
+        self.pwm = PWM(Pin(self._pin), freq=self._freq, duty_u16=self._duty)
+
+    @property
+    def pwm_freq(self) -> int:
+        return self._freq
+
+    @pwm_freq.setter
+    def pwm_freq(self, freq: int) -> None:
+        # not sure what the freq range is
+        self.pwm.freq(freq)
+
+    @property
+    def pwm_duty_u16(self) -> int:
+        return self._duty
+
+    @pwm_duty_u16.setter
+    def pwm_duty_u16(self, duty_u16: int) -> None:
+        if 0 > duty_u16 > 65535:
+            raise InvalidValue("duty_u16 cannot go above 65535 or below 0!")
+
+        self._duty = duty_u16
+        self.pwm.duty_u16(duty_u16)
+
+    def set_duty_u16(self, duty_u16: int) -> None:
+        """
+        Sets PWM duty cycle as a ratio of value / 65535
+        """
+        if 0 > duty_u16 > 65535:
+            raise InvalidValue("duty_u16 cannot go above 65535 or below 0!")
+
+        self.pwm_duty_u16 = duty_u16
+        self.pwm.duty_u16(duty_u16)
+
+    def set_duty_percentage(self, duty_percentage: int) -> None:
+        """
+        Sets PWM duty cycle as a percentage
+        """
+        if 0 > duty_percentage > 100:
+            raise InvalidValue("Percentage has to be between 0 and 100!")
+
+        _duty_u16 = round((duty_percentage / 100) * 65535)
+        self.set_duty_u16(_duty_u16)
+
+
 class I2CBus:
     def __init__(self, device: RaspPiPico2W, port: int = 0, sda: int = 0, scl: int = 1, freq: int = 100000,
                  stop_on_error: bool = False, cache_lifetime: int = 50) -> None:
@@ -129,8 +184,6 @@ class I2CBus:
         :param stop_on_error: Whether to raise an exception when an I2C read/write error occurs
         :param cache_lifetime: If -1, cache is disabled and will always recall data. When set above 1, cache is enabled and will only recall data if the last read was more than cache_lifetime milliseconds ago.
         """
-        from machine import I2C, Pin
-
         if not device.validate_i2c_pin(port, sda, scl):
             raise InvalidPin(f"Port {port} doesn't match SDA {sda} / SCL {scl} or SDA {sda} / SCL {scl} isn't valid!")
 
@@ -1051,7 +1104,15 @@ class KorrySwitch:
 
 
 class ACRemote:
-    from enum import IntEnum
+    """
+    Timings for the AC protocol
+    """
+    WAKEUP_BIT1 = (9000, 1)
+    WAKEUP_BIT2 = (4500, 0)
+    BIT_MARK = (600, 1)
+    BIT_1 = (1600, 0)
+    BIT_0 = (540, 0)
+    MSG_SPACE = (20000, 0)
 
     class ACMode(IntEnum):
         AUTO = 0
@@ -1084,9 +1145,10 @@ class ACRemote:
         INDOOR_AMBIENT = 2
         OUTDOOR_AMBIENT = 3
 
-    def __init__(self, device: GPIOPin) -> None:
+    def __init__(self, device: RaspPiPico2W, pin: int = 0) -> None:
         """
-        :param device: GPIOPin object for the IR LED
+        :param device: RaspPiPico2W device
+        :param pin: Pin used for the LED
         """
         self._enabled = False
         self._mode = self.ACMode.AUTO
@@ -1102,6 +1164,9 @@ class ACRemote:
         self._timer_hour = 0
 
         self._device = device
+        self._pin = pin
+        self._led = GPIOPWM(self._device, self._pin, freq = 38000)
+
 
     # region properties and setters
     """
@@ -1260,6 +1325,8 @@ class ACRemote:
 
     # endregion
 
+     #region helper functions
+
     @staticmethod
     def _get_timer_bits_packet_13(hours: float) -> tuple[str, str]:
         """
@@ -1345,12 +1412,14 @@ class ACRemote:
         modded = "".join(reversed(modded))
         return modded
 
-    def calculate_bits(self) -> str:
+    # endregion
+
+    def _calculate_bits(self) -> str:
         """
         Calculates the bits to send to the AC remote using the set parameters of the object
         :return: str of bits
         """
-        packet1 = (
+        _packet1 = (
             "".join(reversed(f"{self._mode:03b}")),
             "1" if self._enabled else "0",
             "".join(reversed(f"{self._fan_speed:02b}")),
@@ -1367,18 +1436,18 @@ class ACRemote:
             "1" if self._x_fan else "0",
             "00001010010"
         )
-        packet1 = "".join(packet1)
+        _packet1 = "".join(_packet1)
 
-        packet2 = (
+        _packet2 = (
             "".join(reversed(f"{self._swing_mode:04b}")),
             "0000",
             "".join(reversed(f"{self._view_temp:02b}")),
             "000011000000000000",
-            f"{self._calculate_checksum_1(packet1)}"
+            f"{self._calculate_checksum_1(_packet1)}"
         )
-        packet2 = "".join(packet2)
+        _packet2 = "".join(_packet2)
 
-        packet3 = (
+        _packet3 = (
             "".join(reversed(f"{self._mode:03b}")),
             "1" if self._enabled else "0",
             "".join(reversed(f"{self._fan_speed:02b}")),
@@ -1398,9 +1467,9 @@ class ACRemote:
             "1" if not self._timer_enabled else "0",
             "010"
         )
-        packet3 = "".join(packet3)
+        _packet3 = "".join(_packet3)
 
-        half_packet4 = (
+        _half_packet4 = (
             "0",
             f"{self._get_timer_bits_packet_4(self._timer_hour)}" if not self._enabled and self._timer_enabled else "0000000000",
             "00",
@@ -1410,15 +1479,53 @@ class ACRemote:
             "1" if not self._enabled and self._timer_enabled else "0",
             "00",
         )
-        checksum2 = self._calculate_checksum_2(packet3, "".join(half_packet4))
-        packet4 = "".join(half_packet4) + checksum2
+        _checksum2 = self._calculate_checksum_2(_packet3, "".join(_half_packet4))
+        _packet4 = "".join(_half_packet4) + _checksum2
 
         if self._timer_enabled:
-            return f"{packet1} {packet2}-{packet3} {packet4}"
+            return f"{_packet1} {_packet2}-{_packet3} {_packet4}"
         else:
-            packet3 = "00000000000000000000000000000101010"
-            packet4 = "00000000000000000000000000000101"
-            return f"{packet1} {packet2}-{packet3} {packet4}"
+            _packet3 = "00000000000000000000000000000101010"
+            _packet4 = "00000000000000000000000000000101"
+            return f"{_packet1} {_packet2}-{_packet3} {_packet4}"
+
+    def _get_timings(self) -> list[tuple[int, int]]:
+        """
+        Calculates the timings from the objects parameters
+        """
+        _data = self._calculate_bits()
+        _data = _data.split("-")
+
+        _timings = []
+
+        for d in _data:
+            _timings.append(self.WAKEUP_BIT1)
+            _timings.append(self.WAKEUP_BIT2)
+
+            for bit in d:
+                if bit == "1":
+                    _timings.append(self.BIT_MARK)
+                    _timings.append(self.BIT_1)
+                if bit == "0":
+                    _timings.append(self.BIT_MARK)
+                    _timings.append(self.BIT_0)
+                if bit == " ":
+                    _timings.append(self.BIT_MARK)
+                    _timings.append(self.MSG_SPACE)
+
+            _timings.append(self.BIT_MARK)
+            _timings.append((40000, 0))
+
+        for _ in range(2): del _timings[-1]
+
+        return _timings
+
+    def send_data(self) -> None:
+        for timing, state in self._get_timings():
+            self._led.set_duty_percentage(state * 50)
+            time.sleep_us(timing)
+
+        self._led.set_duty_percentage(0)
 
 
 #! Helper Functions, delete after done testing

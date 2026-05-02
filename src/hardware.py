@@ -1084,26 +1084,24 @@ class ACRemote:
         INDOOR_AMBIENT = 2
         OUTDOOR_AMBIENT = 3
 
-    def __init__(self, device: GPIOPin, pin: int = 0) -> None:
+    def __init__(self, device: GPIOPin) -> None:
         """
-        :param device: GPIOPin object
-        :param pin: Pin to use for the AC remote
+        :param device: GPIOPin object for the IR LED
         """
-        self.enabled = False
-        self.mode = self.ACMode.AUTO
-        self.fan_speed = self.ACFanSpeed.AUTO
-        self.view_temp = self.ACTemperatureReading.OFF
-        self.swing_mode = self.ACSwing.OFF
-        self.target_temp = 25
-        self.sleep = False
-        self.turbo = False
-        self.light = False
-        self.x_fan = False
-        self.timer_enabled = False
-        self.timer_hour = 0
+        self._enabled = False
+        self._mode = self.ACMode.AUTO
+        self._fan_speed = self.ACFanSpeed.AUTO
+        self._view_temp = self.ACTemperatureReading.OFF
+        self._swing_mode = self.ACSwing.OFF
+        self._target_temp = 25
+        self._sleep = False
+        self._turbo = False
+        self._light = False
+        self._x_fan = False
+        self._timer_enabled = False
+        self._timer_hour = 0
 
         self._device = device
-        self._pin = pin
 
     # region properties and setters
     """
@@ -1111,143 +1109,143 @@ class ACRemote:
     """
     @property
     def enabled(self) -> bool:
-        return self.enabled
+        return self._enabled
 
     @enabled.setter
     def enabled(self, value: bool | str):
         if value == True or value == "HIGH":
-            self.enabled = True
+            self._enabled = True
         else:
-            self.enabled = False
+            self._enabled = False
 
     @property
     def mode(self) -> ACMode:
-        return self.mode
+        return self._mode
 
     @mode.setter
     def mode(self, value: ACMode) -> None:
         if value == self.ACMode.AUTO:
-            self.target_temp = 25
-            self.sleep = False
+            self._target_temp = 25
+            self._sleep = False
         if value == self.ACMode.FAN:
             self.ACFanSpeed = self.ACFanSpeed.LOW
-            self.sleep = False
+            self._sleep = False
         if value == self.ACMode.COOL:
-            self.turbo = False
-            self.x_fan = False
+            self._turbo = False
+            self._x_fan = False
         if value == self.ACMode.HEAT:
-            self.turbo = False
+            self._turbo = False
         if value == self.ACMode.DRY:
-            self.x_fan = False
+            self._x_fan = False
 
-        self.mode = value
+        self._mode = value
 
     @property
     def fan_speed(self) -> ACFanSpeed:
-        return self.fan_speed
+        return self._fan_speed
 
     @fan_speed.setter
     def fan_speed(self, value: ACFanSpeed) -> None:
         if value == self.ACMode.FAN:
             raise InvalidValue("Fan speed cannot be changed when in FAN mode!")
 
-        self.fan_speed = value
+        self._fan_speed = value
 
     @property
     def view_temp(self) -> ACTemperatureReading:
-        return self.view_temp
+        return self._view_temp
 
     @view_temp.setter
     def view_temp(self, value: ACTemperatureReading) -> None:
-        self.view_temp = value
+        self._view_temp = value
 
     @property
     def swing_mode(self) -> ACSwing:
-        return self.swing_mode
+        return self._swing_mode
 
     @swing_mode.setter
     def swing_mode(self, value: ACSwing) -> None:
-        self.swing_mode = value
+        self._swing_mode = value
 
+    """
+    Target temp is value - 16, remove 5th bit
+    """
     @property
     def target_temp(self) -> int:
-        return self.target_temp
+        return self._target_temp
 
     @target_temp.setter
     def target_temp(self, value: int) -> None:
         if 30 < value < 16:
             raise InvalidValue(f"Target temperature must be between 30 and 16 degrees!")
-        if self.mode == self.ACMode.AUTO:
+        if value == self.ACMode.AUTO:
             raise InvalidValue(f"Target temperature cannot be set when in AUTO mode!")
 
-        self.target_temp = value
+        self._target_temp = value - 16
 
     @property
     def sleep(self) -> bool:
-        if self.mode in [self.ACMode.AUTO, self.ACMode.FAN]:
-            raise InvalidValue(f"Cannot set sleep mode when in AUTO or FAN mode!")
-
-        return self.sleep
+        return self._sleep
 
     @sleep.setter
     def sleep(self, value: bool | str):
-        if self.mode not in (self.ACMode.COOL, self.ACMode.DRY):
-            raise InvalidSetup("Sleep is not available in AUTO, FAN or HEAT modes!")
+        if value not in (self.ACMode.COOL, self.ACMode.DRY, self.ACMode.HEAT):
+            raise InvalidSetup("Sleep is not available in AUTO or FAN modes!")
         if value == True or value == "HIGH":
-            self.sleep = True
+            self._sleep = True
         else:
-            self.sleep = False
+            self._sleep = False
 
     @property
     def turbo(self) -> bool:
-        return self.turbo
+        return self._turbo
 
     @turbo.setter
     def turbo(self, value: bool | str):
-        if self.mode not in (self.ACMode.COOL, self.ACMode.HEAT):
+        if value not in (self.ACMode.COOL, self.ACMode.HEAT):
             raise InvalidSetup("Turbo is not available in DRY, FAN, or AUTO mode!")
         if value == True or value == "HIGH":
-            self.turbo = True
+            self._turbo = True
         else:
-            self.turbo = False
+            self._turbo = False
 
     @property
     def light(self) -> bool:
-        return self.light
+        return self._light
 
     @light.setter
     def light(self, value: bool | str):
         if value == True or value == "HIGH":
-            self.light = True
+            self._light = True
         else:
-            self.light = False
+            self._light = False
 
     @property
     def x_fan(self) -> bool:
-        return self.x_fan
+        return self._x_fan
 
     @x_fan.setter
     def x_fan(self, value: bool | str):
         if value == True or value == "HIGH":
-            self.x_fan = True
+            self._x_fan = True
         else:
-            self.x_fan = False
+            self._x_fan = False
 
     @property
     def timer_enabled(self) -> bool:
-        return self.timer_enabled
+        return self._timer_enabled
 
     @timer_enabled.setter
     def timer_enabled(self, value: bool | str):
         if value == True or value == "HIGH":
-            self.timer_enabled = True
+            self._timer_enabled = True
         else:
-            self.timer_enabled = False
-            self.timer_hour = 0
+            self._timer_enabled = False
+            self._timer_hour = 0
 
     @property
     def timer_hour(self) -> int:
-        return self.timer_hour
+        return self._timer_hour
 
     @timer_hour.setter
     def timer_hour(self, value: float) -> None:
@@ -1255,15 +1253,49 @@ class ACRemote:
             raise InvalidValue(f"Timer hour must be between 0.5 and 24!")
         if value % 0.5 != 0:
             raise InvalidValue(f"Timer hour must be a multiple of 0.5!")
-        if not self.timer_enabled:
+        if not self._timer_enabled:
             raise InvalidSetup("Timer must be enabled to set the timer hour!")
 
-        self.timer_hour = value
+        self._timer_hour = value
 
     # endregion
 
     @staticmethod
-    def _get_timer_bits(hours: float) -> str:
+    def _get_timer_bits_packet_13(hours: float) -> tuple[str, str]:
+        """
+        Gets the timer bits for packet 1 and 3
+        :param hours: Hours to set the timer to
+        :return: Returns the timer bits for packet 1 and 3
+        """
+        remaining_hours = hours * 2
+
+        weights = [
+            (40, "add20"),
+            (20, "add10"),
+            (16, "add8"),
+            (8, "add4"),
+            (4, "add2"),
+            (2, "add1"),
+            (1, "add_half")
+        ]
+
+        bits = {}
+        for weight, name in weights:
+            if remaining_hours >= weight:
+                bits[name] = "1"
+                remaining_hours -= weight
+            else:
+                bits[name] = "0"
+
+        return f"{bits['add_half']}{bits['add10']}{bits['add20']}", f"{bits['add1']}{bits['add2']}{bits['add4']}{bits['add8']}"
+
+    @staticmethod
+    def _get_timer_bits_packet_4(hours: float) -> str:
+        """
+        Gets the timer bits for packet 4
+        :param hours: Hours to set the timer to
+        :return: Returns the timer bits for packet 4
+        """
         if 0.5 > hours > 24:
             raise InvalidValue(f"Timer hour must be between 0.5 and 24!")
         if hours % 0.5 != 0:
@@ -1271,16 +1303,123 @@ class ACRemote:
 
         hours_2x = int(hours * 2)
 
-        nibble_2_offset = hours_2x % 16
+        nibble_2_offset = (hours_2x - 1) // 16
 
-        # TODO pls finish
+        nibble_1 = "".join(reversed(f"{16 - (hours_2x % 16):04b}"))[0:4]
+        nibble_2 = "".join(reversed(f"{((hours_2x - 1 - nibble_2_offset) % 16):04b}"))
+        bit9 = "1" if 18 <= hours_2x <= 34 else "0"
+        bit10 = "1" if 35 <= hours_2x <= 48 else "0"
 
-    def _calculate_bits(self) -> str:
+        timer_bit = nibble_1 + nibble_2 + bit9 + bit10
+
+        return timer_bit
+
+    @staticmethod
+    def _calculate_checksum_1(packet1: str) -> str:
+        """
+        Calculates the checksum for packet 2
+        :param packet1: Packet 1 input
+        :return: Returns the checksum for packet 2
+        """
+        nibbles = [packet1[0:4], packet1[8:12], packet1[16:20]]
+        summed = sum(int("".join(reversed(nibble)), 2) for nibble in nibbles)
+        modded = (summed + 6) % 16
+        modded = f"{modded:04b}"
+        modded = "".join(reversed(modded))
+        return modded
+
+
+    @staticmethod
+    def _calculate_checksum_2(packet3: str, half_packet4: str) -> str:
+        """
+        Calculates the checksum for packet 4
+        :param packet3: Packet 3 input
+        :param half_packet4: Half of packet 4 input (without the last four bits, the checksum)
+        :return: Returns the checksum for packet 4
+        """
+        nibbles = [packet3[0:4], packet3[8:12], packet3[16:20], half_packet4[4:8], half_packet4[12:16],
+                   half_packet4[20:24]]
+        summed = sum(int("".join(reversed(nibble)), 2) for nibble in nibbles)
+        modded = (summed + 10) % 16
+        modded = f"{modded:04b}"
+        modded = "".join(reversed(modded))
+        return modded
+
+    def calculate_bits(self) -> str:
         """
         Calculates the bits to send to the AC remote using the set parameters of the object
         :return: str of bits
         """
-        ...
+        packet1 = (
+            "".join(reversed(f"{self._mode:03b}")),
+            "1" if self._enabled else "0",
+            "".join(reversed(f"{self._fan_speed:02b}")),
+            "1" if self._swing_mode in [self.ACSwing.FULL, self.ACSwing.SWING_LOW, self.ACSwing.SWING_MIDDLE,
+                                        self.ACSwing.SWING_HIGH] else "0",
+            "1" if self._sleep else "0",
+            "".join(reversed(f"{self._target_temp:04b}")),
+            f"{self._get_timer_bits_packet_13(self._timer_hour)[0]}",
+            "1" if self.timer_enabled else "0",
+            f"{self._get_timer_bits_packet_13(self._timer_hour)[1]}",
+            "1" if self._turbo else "0",
+            "1" if self._light else "0",
+            "1" if self._enabled or self._timer_enabled else "0",
+            "1" if self._x_fan else "0",
+            "00001010010"
+        )
+        packet1 = "".join(packet1)
+
+        packet2 = (
+            "".join(reversed(f"{self._swing_mode:04b}")),
+            "0000",
+            "".join(reversed(f"{self._view_temp:02b}")),
+            "000011000000000000",
+            f"{self._calculate_checksum_1(packet1)}"
+        )
+        packet2 = "".join(packet2)
+
+        packet3 = (
+            "".join(reversed(f"{self._mode:03b}")),
+            "1" if self._enabled else "0",
+            "".join(reversed(f"{self._fan_speed:02b}")),
+            "1" if self._swing_mode in [self.ACSwing.FULL, self.ACSwing.SWING_LOW, self.ACSwing.SWING_MIDDLE,
+                                        self.ACSwing.SWING_HIGH] else "0",
+            "1" if self._sleep else "0",
+            "".join(reversed(f"{self._target_temp:04b}")),
+            f"{self._get_timer_bits_packet_13(self._timer_hour)[0]}"
+            "1" if self.timer_enabled else "0",
+            f"{self._get_timer_bits_packet_13(self._timer_hour)[1]}",
+            "1" if self._turbo else "0",
+            "1" if self._light else "0",
+            "1",
+            "1" if self._x_fan else "0",
+            "000001",
+            "1" if self._timer_enabled else "0",
+            "1" if not self._timer_enabled else "0",
+            "010"
+        )
+        packet3 = "".join(packet3)
+
+        half_packet4 = (
+            "0",
+            f"{self._get_timer_bits_packet_4(self._timer_hour)}" if not self._enabled and self._timer_enabled else "0000000000",
+            "00",
+            f"{self._get_timer_bits_packet_4(self._timer_hour)}" if self._enabled and self._timer_enabled else "0000000000",
+            "0",
+            "1" if self._enabled and self._timer_enabled else "0",
+            "1" if not self._enabled and self._timer_enabled else "0",
+            "00",
+        )
+        checksum2 = self._calculate_checksum_2(packet3, "".join(half_packet4))
+        packet4 = "".join(half_packet4) + checksum2
+
+        if self._timer_enabled:
+            return f"{packet1} {packet2}-{packet3} {packet4}"
+        else:
+            packet3 = "00000000000000000000000000000101010"
+            packet4 = "00000000000000000000000000000101"
+            return f"{packet1} {packet2}-{packet3} {packet4}"
+
 
 #! Helper Functions, delete after done testing
 def execution_time(f):
@@ -1306,6 +1445,8 @@ if __name__ == "__main__":
     led1 = LED(hc, 0)
     led2 = LED(hc, 1)
 
+    irled = GPIOPin(rasppi, 10)
+
     panel_context = {"battery_sw": switch_1,
                      "battery_on_led": led1,
                      "battery_fault_led": led2}
@@ -1314,6 +1455,19 @@ if __name__ == "__main__":
                         lambda context: context["battery_sw"].get_state(),
                         lambda context: context["battery_sw"].get_state() == False)
 
+    ac = ACRemote(irled)
+
+    # ac.turbo = True
+    # ac.light = True
+    ac.enabled = True
+    ac.mode = ACRemote.ACMode.DRY
+    ac.target_temp = 16
+    ac.timer_enabled = True
+    ac.timer_hour = 0.5
+
     while True:
-        time.sleep(0.1)
-        korry.update(panel_context)
+        # for counter in range(1, 49):
+        #     ac.timer_hour = counter / 2
+        #     print(ac.calculate_bits())
+        print(ac.calculate_bits())
+        time.sleep(2)

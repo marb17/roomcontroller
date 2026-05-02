@@ -1518,6 +1518,11 @@ class ACRemote:
 
         for _ in range(2): del _timings[-1]
 
+        _timings.append(self.BIT_MARK)
+        _timings.append(self.BIT_0)
+
+        print(_timings)
+
         return _timings
 
     def send_data(self) -> None:
@@ -1539,42 +1544,3 @@ def execution_time(f):
 
         return data
     return wrapper
-
-
-if __name__ == "__main__":
-    # wdt = WDT(timeout=8000)
-    rasppi = RaspPiPico2W()
-    i2c_bus = I2CBus(rasppi, 0, sda=16, scl=17, freq=100000, stop_on_error=True)
-    pcf1 = PCF8575(i2c_bus, 0x23)
-    hc = HC595(rasppi, 0, 1, 2)
-
-    switch_1 = Switch.from_pin(pcf1, 0)
-    led1 = LED(hc, 0)
-    led2 = LED(hc, 1)
-
-    irled = GPIOPin(rasppi, 10)
-
-    panel_context = {"battery_sw": switch_1,
-                     "battery_on_led": led1,
-                     "battery_fault_led": led2}
-
-    korry = KorrySwitch(switch_1, led1, led2,
-                        lambda context: context["battery_sw"].get_state(),
-                        lambda context: context["battery_sw"].get_state() == False)
-
-    ac = ACRemote(irled)
-
-    # ac.turbo = True
-    # ac.light = True
-    ac.enabled = True
-    ac.mode = ACRemote.ACMode.DRY
-    ac.target_temp = 16
-    ac.timer_enabled = True
-    ac.timer_hour = 0.5
-
-    while True:
-        # for counter in range(1, 49):
-        #     ac.timer_hour = counter / 2
-        #     print(ac.calculate_bits())
-        print(ac.calculate_bits())
-        time.sleep(2)

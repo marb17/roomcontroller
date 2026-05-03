@@ -993,8 +993,6 @@ class PCA9685:
         _off_count = round((duty_cycle / 100) * 4095)
         _off_count = _off_count.to_bytes(2, "big")
 
-        print(f"{hex(_off_count[0])} {hex(_off_count[1])}")
-
         self._device.writeto_mem(self._address, 0x06 + (channel * 4), bytearray([0x00, 0x00, _off_count[1], _off_count[0]]))
 
     def write_angle(self, channel: int, angle: float, min_max_movement: tuple[float, float]=(3.1, 15)) -> None:
@@ -1459,7 +1457,7 @@ class ACRemote:
             "1" if self.timer_enabled else "0",
             f"{self._get_timer_bits_packet_13(self._timer_hour)[1]}",
             "1" if self._turbo else "0",
-            "1" if self._light else "0",
+            "1" if self._light  else "0",
             "1",
             "1" if self._x_fan else "0",
             "000001",
@@ -1520,8 +1518,6 @@ class ACRemote:
 
         _timings.append(self.BIT_MARK)
         _timings.append(self.BIT_0)
-
-        print(_timings)
 
         return _timings
 

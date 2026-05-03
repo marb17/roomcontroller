@@ -7,9 +7,3 @@ class ClassName:
         ...
         return ...
 """
-
-# AC Remote Logic
-class ACRemoteLogic:
-    @staticmethod
-    def get_data_bits(state: dict[str, str | bool]):
-        ...

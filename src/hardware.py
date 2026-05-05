@@ -90,6 +90,13 @@ class GPIOPin:
 
         self.pin = Pin(self._pin_num, mode=self._mode, pull=self._pull, value=self._value)
 
+    @property
+    def is_pressed(self):
+        """
+        Is pin currently pressed (GND)?
+        """
+        return self.get_state()
+
     def get_state(self) -> bool:
         """
         Gets current state of the pin
@@ -311,6 +318,25 @@ class PCF8575:
         self._cache = None
         self._last_called = time.ticks_ms()
 
+    @property
+    def current_pin_state(self) -> bytearray:
+        """
+        Returns the current pin state
+        :return: Current pin state
+        """
+        return self._pin_mode
+
+    def _edit_bit(self, value: str | bool, pin: int) -> None:
+        """
+        Edits a single pin's value without updating the board
+        :param value: str of "HIGH" or "LOW" / boolean to set pin mode
+        :param pin: Pin to edit
+        """
+        if value == "HIGH" or value == True:
+            self._pin_mode[0 if (pin // 10) == 0 else 1] |= (1 << (pin % 10))
+        else:
+            self._pin_mode[0 if (pin // 10) == 0 else 1] &= ~(1 << (pin % 10))
+
     def claim_pin(self, pin: int) -> None:
         """
         Claims a pin.
@@ -319,13 +345,6 @@ class PCF8575:
         if pin in self._claimed_pins:
             raise ValueError(f"Pin {pin} already claimed!")
         self._claimed_pins.add(pin)
-
-    def current_pin_state(self) -> bytearray:
-        """
-        Returns the current pin state
-        :return: Current pin state
-        """
-        return self._pin_mode
 
     def update_cache(self) -> None:
         """
@@ -344,7 +363,8 @@ class PCF8575:
         if self._cache_lifetime == -1:
             return self._bus.readfrom(self._address, 2)
         else:
-            if time.ticks_diff(time.ticks_ms(), self._last_called) > self._cache_lifetime or force or self._cache is None:
+            if (time.ticks_diff(time.ticks_ms(), self._last_called) > self._cache_lifetime or
+                    force or self._cache is None):
                 self.update_cache()
             return self._cache
 
@@ -362,8 +382,9 @@ class PCF8575:
 
     def read_pins(self, pins: list[int], force=False) -> list[bool]:
         """
+        Reads multiple pins at once
         :param pins: Uses board pin out (P07-P00 P17-P10), allows multiple pins to be read at once
-        :param force: Forces device to read directly and not use cache
+        :param force: Forces the device to read directly and not use cache
         :return: List of True if GND, False if VCC
         """
         _data = self.read_all(force=force)
@@ -371,24 +392,15 @@ class PCF8575:
 
     def write_all(self, data: bytes | bytearray) -> None:
         """
+        Writes data to all pins
         :param data: Inputs two bytes to be written, 1 = HIGH : 0 = LOW
         """
         self._pin_mode = data
         self._bus.writeto(self._address, self._pin_mode)
 
-    def _edit_bit(self, value: str | bool, pin: int) -> None:
-        """
-        Edits a single pin's value
-        :param value: str of "HIGH" or "LOW" / boolean to set pin mode
-        :param pin: Pin to edit
-        """
-        if value == "HIGH" or value == True:
-            self._pin_mode[0 if (pin // 10) == 0 else 1] |= (1 << (pin % 10))
-        else:
-            self._pin_mode[0 if (pin // 10) == 0 else 1] &= ~(1 << (pin % 10))
-
     def write_pin(self, pin: int, value: str | bool) -> None:
         """
+        Writes a single pin's value, updates the board
         :param pin: Uses board pin out (P07-P00 P17-P10)
         :param value: str of "HIGH" or "LOW" to set pin mode
         """
@@ -401,9 +413,9 @@ class PCF8575:
 
         self.write_all(self._pin_mode)
 
-    def update_pin(self, pin: int, value: bool | str) -> None:
+    def non_updating_pin_write(self, pin: int, value: bool | str) -> None:
         """
-        Edits a single pin's value
+        Edits a single pin's value, without updating
         :param pin: Pin to edit
         :param value: str of "HIGH" or "LOW" / boolean to set pin mode
         """
@@ -496,7 +508,8 @@ class PCF8575Multiplex(PCF8575):
         if safe:
             self.reset_pins()
 
-        if force or time.ticks_diff(time.ticks_ms(), self._last_called) > self._last_called:
+        if (force or time.ticks_diff(time.ticks_ms(), self._last_called) > self._last_called or
+                self._cache_lifetime == -1):
             self.write_pin(row, "LOW")
             _state = self.read_pin(column, force=True)
             self.write_pin(row, "HIGH")
@@ -522,14 +535,15 @@ class PCF8575Multiplex(PCF8575):
         if safe:
             self.reset_pins()
 
-        if force or time.ticks_diff(time.ticks_ms(), self._last_called) > self._last_called:
+        if (force or time.ticks_diff(time.ticks_ms(), self._last_called) > self._last_called or
+                self._cache_lifetime == -1):
             _previous_row = -1
             _temp_data = []
 
             for xy in xy_list:
                 if _previous_row != xy[0]:
                     if _previous_row != -1:
-                        self.update_pin(_previous_row, "HIGH")
+                        self.non_updating_pin_write(_previous_row, "HIGH")
                     self.write_pin(xy[0], "LOW")
                     _previous_row = xy[0]
 
@@ -548,6 +562,7 @@ class PCF8575Multiplex(PCF8575):
 class OutputPin:
     def __init__(self, write_method: Callable[[bool | str], None]) -> None:
         self._write_method = write_method
+        self._value = False
 
     @classmethod
     def from_gpio(cls, pin: int, device: RaspPiPico2W, invert: bool = False):
@@ -590,7 +605,22 @@ class OutputPin:
         Sets pin to HIGH or LOW
         :param value: str of "HIGH" or "LOW" / boolean to set pin mode
         """
+        self.value = value
+
+    @property
+    def value(self) -> bool:
+        """
+        Returns pin state as boolean
+        """
+        return self._value
+
+    @value.setter
+    def value(self, value: bool | str) -> None:
+        """
+        Sets pin to HIGH or LOW
+        """
         self._write_method(value)
+        self._value = True if value == True or value == "HIGH" else False
 
 
 class HC595:
@@ -685,22 +715,46 @@ class LED:
         self._shift_register = shift_register
         self._pin = pin
         self._value = False
+        self._enabled = True
 
         self._shift_register.claim_pin(self._pin)
 
-    def write_led(self, value: bool | str) -> None:
+    def _update_led(self):
+        self._shift_register.write_pin(self._pin, self._value if self._enabled else False)
+
+    @property
+    def enabled(self) -> bool:
+        """
+        Returns if LED enabled or disabled.
+        """
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool | str) -> None:
+        """
+        Sets LED enabled or disabled.
+        """
+        self._enabled = value
+        self._update_led()
+
+    @property
+    def value(self) -> bool:
+        """
+        Returns LED state
+        """
+        return self._value
+
+    @value.setter
+    def value(self, value: bool | str) -> None:
+        """
+        Sets LED state
+        """
         if value == True or value == "HIGH":
             self._value = True
         else:
             self._value = False
 
-        self._shift_register.write_pin(self._pin, self._value)
-
-    def enable_output(self, value: bool | str) -> None:
-        if value == True or value == "HIGH":
-            self._shift_register.write_pin(self._pin, self._value)
-        else:
-            self._shift_register.write_pin(self._pin, False)
+        self._shift_register.write_pin(self._pin, self._value if self._enabled else False)
 
 
 class SegmentDisplay:
@@ -817,6 +871,14 @@ class RotarySwitch:
 
         return cls(switches, read_method)
 
+    @property
+    def position(self) -> int | None:
+        """
+        Gets the position of the rotary switch
+        :return: Returns the position of the rotary switch
+        """
+        return self.get_state()
+
     def get_state(self, safe=False, force: bool = True) -> int | None:
         """
         Gets the state of the rotary switch
@@ -846,14 +908,6 @@ class RotarySwitch:
         """
         _data = self._read_method()
         return bool(_data[pos])
-
-    @property
-    def position(self) -> int | None:
-        """
-        Gets the position of the rotary switch
-        :return: Returns the position of the rotary switch
-        """
-        return self.get_state()
 
 
 class Switch:
@@ -989,6 +1043,8 @@ class PCA9685:
         """
         if channel not in range(16):
             raise InvalidValue(f"Channel {channel} is not a valid channel!")
+        if 0 > duty_cycle > 100:
+            raise InvalidValue(f"Duty cycle {duty_cycle} is not a valid duty cycle!")
 
         _off_count = round((duty_cycle / 100) * 4095)
         _off_count = _off_count.to_bytes(2, "big")
@@ -1008,6 +1064,8 @@ class PCA9685:
             raise InvalidValue(f"Min movement {min_max_movement[0]} is less than min range {self._min_max_range[0]}!")
         if min_max_movement[1] > self._min_max_range[1]:
             raise InvalidValue(f"Max movement {min_max_movement[1]} is greater than max range {self._min_max_range[1]}!")
+        if 0 > angle > 180:
+            raise InvalidValue(f"Angle {angle} is not in the range of 0 to 180!")
 
         _duty_cycle = ((angle / 180) * (min_max_movement[1] - min_max_movement[0])) + min_max_movement[0]
         self.write_duty_cycle(channel, _duty_cycle)
@@ -1041,23 +1099,37 @@ class Servo:
         self._channel = channel
         self._min_max_range = min_max_range
         self._min_max_movement = min_max_movement
+        self._angle = 0
+
+    @property
+    def angle(self) -> float:
+        """
+        Returns the angle of the servo
+        """
+        return self._angle
+
+    @angle.setter
+    def angle(self, value: float) -> None:
+        """
+        Sets the angle of the servo
+        :param value: Angle in degrees from 0 to 180 deg
+        """
+        if 0 > value > 180:
+            raise InvalidValue(f"Angle {value} is not in the range of 0 to 180!")
+
+        self._angle = value
+        self.servo_write_angle(self._angle)
 
     def servo_write_angle(self, angle: float):
         """
         Writes the angle to the servo
-        :param angle: Angle in degrees
+        :param angle: Angle in degrees from 0 to 180 degrees.
         """
-        self._device.write_angle(self._channel, angle, self._min_max_movement)
+        if 0 > angle > 180:
+            raise InvalidValue(f"Angle {angle} is not in the range of 0 to 180!")
 
-    def global_enable_output(self, enable: bool | str = True) -> None:
-        """
-        Globally disables output
-        :param enable: boolean to disable output GLOBALLY
-        """
-        if enable == True or enable == "HIGH":
-            self._device.oe_pin_enable(True)
-        else:
-            self._device.oe_pin_enable(False)
+        self._angle = angle
+        self._device.write_angle(self._channel, self._angle, self._min_max_movement)
 
 
 class KorrySwitch:
@@ -1091,14 +1163,14 @@ class KorrySwitch:
         :param context: Context object containing all objects
         """
         if self._condition1(context):
-            self._led1.write_led(True)
+            self._led1.value = True
         else:
-            self._led1.write_led(False)
+            self._led1.value = False
 
         if self._condition2(context):
-            self._led2.write_led(True)
+            self._led2.value = True
         else:
-            self._led2.write_led(False)
+            self._led2.value = False
 
 
 class ACRemote:
@@ -1146,7 +1218,7 @@ class ACRemote:
     def __init__(self, device: RaspPiPico2W, pin: int = 0) -> None:
         """
         :param device: RaspPiPico2W device
-        :param pin: Pin used for the LED
+        :param pin: GPIO Pin used for the LED on the RaspPiPico2W
         """
         self._enabled = False
         self._mode = self.ACMode.AUTO
@@ -1323,7 +1395,7 @@ class ACRemote:
 
     # endregion
 
-     #region helper functions
+    #region helper functions
 
     @staticmethod
     def _get_timer_bits_packet_13(hours: float) -> tuple[str, str]:
@@ -1392,7 +1464,6 @@ class ACRemote:
         modded = f"{modded:04b}"
         modded = "".join(reversed(modded))
         return modded
-
 
     @staticmethod
     def _calculate_checksum_2(packet3: str, half_packet4: str) -> str:
@@ -1489,7 +1560,7 @@ class ACRemote:
 
     def _get_timings(self) -> list[tuple[int, int]]:
         """
-        Calculates the timings from the objects parameters
+        Calculates the timings from the object's parameters
         """
         _data = self._calculate_bits()
         _data = _data.split("-")
@@ -1529,6 +1600,44 @@ class ACRemote:
         self._led.set_duty_percentage(0)
 
 
+class LightSwitch:
+    def __init__(self, device: Servo, center_angle: int = 90, wait_time_ms: int = 200, invert: bool = False) -> None:
+        """
+        Creates a LightSwitch object
+        :param device: Servo device to use
+        :param center_angle: The angle of the IDLE position of the servo, where it is in the middle
+        :param wait_time_ms: The time to wait between each servo move, in milliseconds
+        :param invert: Whether to invert the direction of the servo
+        """
+        self._device = device
+        self._center_angle = center_angle
+        self._wait_time_ms = wait_time_ms
+        self._invert = invert
+        self._light_on = False
+
+    @property
+    def light_on(self) -> bool:
+        return self._light_on
+
+    @light_on.setter
+    def light_on(self, value: bool | str):
+        if value == True or value == "HIGH":
+            self._light_on = True
+        else:
+            self._light_on = False
+
+        self._update_servo()
+
+    def _update_servo(self):
+        if self._light_on:
+            self._device.angle = 0 if self._invert else 180
+            time.sleep_ms(self._wait_time_ms)
+            self._device.angle = self._center_angle
+        else:
+            self._device.angle = 180 if self._invert else 0
+            time.sleep_ms(self._wait_time_ms)
+            self._device.angle = self._center_angle
+
 #! Helper Functions, delete after done testing
 def execution_time(f):
     def wrapper(*args, **kwargs):
@@ -1540,3 +1649,33 @@ def execution_time(f):
 
         return data
     return wrapper
+
+#! DELETE AFTER TESTING
+rasp = RaspPiPico2W()
+i2cbus = I2CBus(rasp, 0, 16, 17, freq=100000)
+pca = PCA9685(i2cbus, 0x40)
+
+servo1 = Servo(pca, 0)
+servo2 = Servo(pca, 1)
+swtich = GPIOPin(rasp, 21, Pin.IN, Pin.PULL_UP)
+
+swtich.set_pin(True)
+
+light1 = LightSwitch(servo1, 120, invert=True)
+light2 = LightSwitch(servo2, 95)
+
+prev_pressed = swtich.is_pressed
+
+while True:
+    # servo1.angle = 0
+    # time.sleep(0.5)
+    if swtich.is_pressed != prev_pressed:
+        print(swtich.is_pressed)
+        prev_pressed = swtich.is_pressed
+        light1.light_on = swtich.is_pressed
+        light2.light_on = swtich.is_pressed
+
+    # time.sleep(0.5)
+    # servo1.angle = 180
+    # time.sleep(0.5)
+    time.sleep_ms(50)

@@ -1663,17 +1663,28 @@ class ACRemote:
 
 
 class LightSwitch:
-    def __init__(self, device: Servo, center_angle: int = 90, wait_time_ms: int = 200, invert: bool = False, always_update: bool = False) -> None:
+    def __init__(self, device: Servo, center_angle: int = 90, movement_limit: tuple[int, int] | None = None, wait_time_ms: int = 200, invert: bool = False, always_update: bool = False) -> None:
         """
         Creates a LightSwitch object
         :param device: Servo device to use
         :param center_angle: The angle of the IDLE position of the servo, where it is in the middle
+        :param movement_limit: The angle range that the servo can move in
         :param wait_time_ms: The time to wait between each servo move, in milliseconds
         :param invert: Whether to invert the direction of the servo
         :param always_update: When set to False, servo data is only sent when the switch state changes, when set to True, servo is always sent
         """
         self._device = device
         self._center_angle = center_angle
+
+        if movement_limit is None:
+            self._movement_limit = (self._center_angle - 10, self._center_angle + 10)
+        else:
+            if movement_limit[0] >= self._center_angle or movement_limit[1] <= self._center_angle:
+                raise InvalidValue("Movement limit must be within the center angle!")
+            if 0 > movement_limit[0] > 180 or 0 > movement_limit[1] > 180:
+                raise InvalidValue("Movement limit must be between 0 and 180 degrees!")
+            self._movement_limit = movement_limit
+
         self._wait_time_ms = wait_time_ms
         self._invert = invert
         self._light_on = False
@@ -1718,18 +1729,24 @@ class LightSwitch:
             self._update_servo()
             self._prev_state = self._light_on
 
+    def move_on(self):
+        self._device.angle = self._movement_limit[0] if self._invert else self._movement_limit[1]
+        time.sleep_ms(self._wait_time_ms)
+        self._device.angle = self._center_angle
+
+    def move_off(self):
+        self._device.angle = self._movement_limit[1] if self._invert else self._movement_limit[0]
+        time.sleep_ms(self._wait_time_ms)
+        self._device.angle = self._center_angle
+
     def _update_servo(self) -> None:
         """
         Helper function to move the servo
         """
         if self._light_on:
-            self._device.angle = 0 if self._invert else 180
-            time.sleep_ms(self._wait_time_ms)
-            self._device.angle = self._center_angle
+            self.move_on()
         else:
-            self._device.angle = 180 if self._invert else 0
-            time.sleep_ms(self._wait_time_ms)
-            self._device.angle = self._center_angle
+            self.move_off()
 
 #! Helper Functions, delete after done testing
 def execution_time(f):
@@ -1754,21 +1771,35 @@ swtich = GPIOPin(rasp, 21, Pin.IN, Pin.PULL_UP)
 
 swtich.set_pin(True)
 
-light1 = LightSwitch(servo1, 120, invert=True)
-light2 = LightSwitch(servo2, 95)
+light1 = LightSwitch(servo1, 120, movement_limit=(80, 150), invert=True)
+light2 = LightSwitch(servo2, 78, movement_limit=(50, 130))
 
 prev_pressed = swtich.is_pressed
 
 while True:
     # servo1.angle = 0
     # time.sleep(0.5)
-    if swtich.is_pressed != prev_pressed:
-        print(swtich.is_pressed)
-        prev_pressed = swtich.is_pressed
-        light1.light_on = swtich.is_pressed
-        light2.light_on = swtich.is_pressed
-
+    # if swtich.is_pressed != prev_pressed:
+    #     time.sleep_ms(10)
+    #     print(swtich.is_pressed)
+    #     prev_pressed = swtich.is_pressed
+    #     light1.light_on = swtich.is_pressed
+    #     light2.light_on = swtich.is_pressed
+    print("cycle")
+    light1.light_on = True
+    light2.light_on = True
     # time.sleep(0.5)
     # servo1.angle = 180
     # time.sleep(0.5)
-    time.sleep_ms(50)
+    time.sleep_ms(1000)
+    print("cycle")
+    light1.light_on = False
+    light2.light_on = False
+    time.sleep_ms(1000)
+    # for i in [0, 180]:
+    #     servo1.angle = i
+    #     servo2.angle = i
+    #     time.sleep_ms(1000)
+
+    # servo1.angle = 90
+    # servo2.angle = 90

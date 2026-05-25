@@ -1663,7 +1663,7 @@ class ACRemote:
 
 
 class LightSwitch:
-    def __init__(self, device: Servo, center_angle: int = 90, movement_limit: tuple[int, int] | None = None, wait_time_ms: int = 200, invert: bool = False, always_update: bool = False) -> None:
+    def __init__(self, device: Servo, center_angle: int = 90, movement_limit: tuple[int, int] | None = None, wait_time_ms: int = 200, invert: bool = False, always_update: bool = False, oe_pin: OutputPin | None = None) -> None:
         """
         Creates a LightSwitch object
         :param device: Servo device to use
@@ -1690,7 +1690,8 @@ class LightSwitch:
         self._light_on = False
         self._prev_state = self._light_on
 
-        self._always_update = False
+        self._always_update = always_update
+        self._oe_pin = oe_pin
 
     @property
     def always_update(self) -> bool:
@@ -1729,15 +1730,27 @@ class LightSwitch:
             self._update_servo()
             self._prev_state = self._light_on
 
+    def _oe_pin_set(self, value: bool) -> None:
+        if self._oe_pin is not None:
+            self._oe_pin.value = value
+
     def move_on(self):
+        self._oe_pin_set(True)
+        time.sleep_ms(20)
         self._device.angle = self._movement_limit[0] if self._invert else self._movement_limit[1]
         time.sleep_ms(self._wait_time_ms)
         self._device.angle = self._center_angle
+        time.sleep_ms(20)
+        self._oe_pin_set(False)
 
     def move_off(self):
+        self._oe_pin_set(True)
+        time.sleep_ms(20)
         self._device.angle = self._movement_limit[1] if self._invert else self._movement_limit[0]
         time.sleep_ms(self._wait_time_ms)
         self._device.angle = self._center_angle
+        time.sleep_ms(20)
+        self._oe_pin_set(False)
 
     def _update_servo(self) -> None:
         """
@@ -1768,34 +1781,35 @@ pca = PCA9685(i2cbus, 0x40)
 servo1 = Servo(pca, 0)
 servo2 = Servo(pca, 1)
 swtich = GPIOPin(rasp, 21, Pin.IN, Pin.PULL_UP)
+oe_pin_pin = OutputPin.from_gpio(0, rasp, invert=True)
 
 swtich.set_pin(True)
 
-light1 = LightSwitch(servo1, 120, movement_limit=(80, 150), invert=True)
-light2 = LightSwitch(servo2, 78, movement_limit=(50, 130))
+light1 = LightSwitch(servo1, 110, movement_limit=(80, 150), invert=True, oe_pin=oe_pin_pin)
+light2 = LightSwitch(servo2, 75, movement_limit=(50, 130), oe_pin=oe_pin_pin)
 
 prev_pressed = swtich.is_pressed
 
 while True:
     # servo1.angle = 0
     # time.sleep(0.5)
-    # if swtich.is_pressed != prev_pressed:
-    #     time.sleep_ms(10)
-    #     print(swtich.is_pressed)
-    #     prev_pressed = swtich.is_pressed
-    #     light1.light_on = swtich.is_pressed
-    #     light2.light_on = swtich.is_pressed
-    print("cycle")
-    light1.light_on = True
-    light2.light_on = True
-    # time.sleep(0.5)
-    # servo1.angle = 180
-    # time.sleep(0.5)
-    time.sleep_ms(1000)
-    print("cycle")
-    light1.light_on = False
-    light2.light_on = False
-    time.sleep_ms(1000)
+    if swtich.is_pressed != prev_pressed:
+        time.sleep_ms(10)
+        print(swtich.is_pressed)
+        prev_pressed = swtich.is_pressed
+        light1.light_on = swtich.is_pressed
+        light2.light_on = swtich.is_pressed
+    # print("cycle")
+    # light1.light_on = True
+    # light2.light_on = True
+    # # time.sleep(0.5)
+    # # servo1.angle = 180
+    # # time.sleep(0.5)
+    # time.sleep_ms(1000)
+    # print("cycle")
+    # light1.light_on = False
+    # light2.light_on = False
+    # time.sleep_ms(1000)
     # for i in [0, 180]:
     #     servo1.angle = i
     #     servo2.angle = i
